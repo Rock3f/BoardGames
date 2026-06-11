@@ -1,6 +1,6 @@
 # Spécification Fonctionnelle — PWA Jeux de Société
 
-**Version :** 0.8 (relecture finale)
+**Version :** 0.9 (relecture finale — synchronisation spec/script)
 **Auteur :** Tanguy
 **Stack :** React · Supabase · GitHub Pages
 **Dernière mise à jour :** 2026-06-11
@@ -19,6 +19,7 @@
 | 0.6 | 2026-06-11 | Présélection jeux restreinte aux collections des participants · Suppression target_play_count (0 à N parties libres) |
 | 0.7 | 2026-06-11 | Config participants/équipes avant démarrage chrono · Équipes libres par partie · Règles championnat verrouillées en active |
 | 0.8 | 2026-06-11 | Relecture finale : 9 corrections (typo alias SQL · ordre migrations · références tables inexistantes · GROUP BY invalide · vérification retrait collection · requête provisionnés · win_rule championnat · périmètre vue play_counts) |
+| 0.9 | 2026-06-11 | Synchronisation spec/script : diagramme architecture · type INTEGER duration_min · formule GREATEST · vue play_counts · cp_select provisionnés · is_winner via trigger · requête suggestion invalide · localStorage stratégie · index pp_play_user_idx · source suggestions §4.2 |
 
 ---
 
@@ -67,13 +68,15 @@ GitHub Pages (SPA React)
                     ├── guest_players
                     ├── game_catalog
                     ├── collection_entries
+                    ├── championships          ← créée avant plays (FK)
+                    ├── championship_players
+                    ├── championship_games
                     ├── plays
                     ├── play_teams
                     ├── play_participants
-                    ├── championships
-                    ├── championship_players
-                    ├── championship_games
-                    └── (vues : play_counts_per_game, championship_standings)
+                    └── (vues : play_counts_per_game,
+                                championship_standings,
+                                game_owners)
 ```
 
 ### 1.4 Conventions transverses
@@ -88,7 +91,7 @@ GitHub Pages (SPA React)
 
 **Dates et durées :**
 - La date d'une partie est toujours la date du jour au moment du démarrage (`now()`). Pas de saisie rétroactive.
-- La durée est mesurée par chronomètre : `started_at` enregistré au clic "Démarrer", `ended_at` enregistré au clic "Fin de partie". `duration_min = EXTRACT(EPOCH FROM (ended_at - started_at)) / 60`.
+- La durée est mesurée par chronomètre : `started_at` enregistré au clic "Démarrer", `ended_at` enregistré au clic "Fin de partie". `duration_min = GREATEST(1, EXTRACT(EPOCH FROM (ended_at - started_at))::int / 60)` — minimum 1 minute pour éviter les valeurs nulles sur des parties très courtes.
 
 **Règle de victoire déclarative :**
 - Chaque partie déclare avant le début sa règle : `highest_score` (plus grand score gagne) ou `lowest_score` (plus petit score gagne).
@@ -429,7 +432,7 @@ Consultation autre joueur : menu ⋮ masqué, covers visibles (bucket public).
 #### Chronomètre automatique
 Une partie est **démarrée** (bouton "Démarrer la partie") puis **terminée** (bouton "Fin de partie"). La durée est calculée automatiquement. La date est celle du démarrage (`played_at = started_at`). Pas de saisie manuelle de date ou durée.
 
-**Gestion de l'état en cours de partie :** l'état `started_at` est stocké localement dans `localStorage` (clé `active_play`) en plus d'être persisté en DB dans `plays.started_at` dès le démarrage. Si l'utilisateur ferme l'app et revient, la partie en cours est restaurée depuis la DB.
+**Gestion de l'état en cours de partie :** dès le clic "Démarrer", la partie est insérée en DB (`plays.ended_at = NULL`). L'app retrouve la partie en cours au chargement via une requête Supabase filtrée sur `ended_at IS NULL AND created_by = auth.uid()`. Un cache en mémoire React (Context) maintient le chrono côté client entre les navigations. Le `localStorage` peut être utilisé comme cache secondaire de l'UUID de la partie active pour éviter une requête réseau au rechargement, mais la DB reste la source de vérité.
 
 #### Règle de victoire déclarative
 Déclarée avant le démarrage de la partie. Deux modes :
@@ -494,7 +497,7 @@ Pour les équipes : tous les membres héritent de is_winner de l'équipe.
 Les entités sans score (NULL) ne sont jamais déclarées vainqueurs.
 ```
 
-Ce calcul est effectué côté client (React) avant l'INSERT/UPDATE final. Il est également re-vérifié côté DB via un trigger `BEFORE INSERT OR UPDATE` pour garantir la cohérence.
+Ce calcul est effectué côté client (React) avant l'INSERT/UPDATE final pour l'affichage en temps réel. Il est également re-vérifié côté DB via un trigger `AFTER INSERT OR UPDATE OF score` sur `play_participants` et `play_teams` pour garantir la cohérence en cas d'écriture directe en base.
 
 #### RB-P04 — Partie en cours
 Une seule partie active à la fois par utilisateur (`ended_at IS NULL AND created_by = auth.uid()`). Une bannière "Partie en cours" est affichée dans toute l'app avec le chrono.
@@ -532,9 +535,9 @@ CREATE TABLE plays (
                     CHECK (win_rule IN ('highest_score', 'lowest_score')),
   started_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   ended_at        TIMESTAMPTZ,
-  duration_min    SMALLINT GENERATED ALWAYS AS (
+  duration_min    INTEGER GENERATED ALWAYS AS (
     CASE WHEN ended_at IS NOT NULL
-    THEN EXTRACT(EPOCH FROM (ended_at - started_at))::int / 60
+    THEN GREATEST(1, EXTRACT(EPOCH FROM (ended_at - started_at))::integer / 60)
     ELSE NULL END
   ) STORED,
   comment         TEXT CHECK (char_length(comment) <= 1000),
@@ -611,6 +614,8 @@ CREATE INDEX pp_user_idx      ON play_participants (user_id)      WHERE user_id 
 CREATE INDEX pp_prov_idx      ON play_participants (provisioned_player_id)
   WHERE provisioned_player_id IS NOT NULL;
 CREATE INDEX pp_team_idx      ON play_participants (play_team_id) WHERE play_team_id IS NOT NULL;
+-- Index composite critique pour les policies RLS (EXISTS sur play_participants.play_id + user_id)
+CREATE INDEX pp_play_user_idx ON play_participants (play_id, user_id) WHERE user_id IS NOT NULL;
 ```
 
 **Logique score individuel vs équipe :**
@@ -767,7 +772,7 @@ SELECT p.catalog_game_id, pp.user_id, COUNT(DISTINCT p.id)
 FROM plays p
 JOIN play_participants pp ON pp.play_id = p.id
 WHERE pp.user_id IS NOT NULL
-  AND pp.user_id != COALESCE(p.created_by, '00000000-0000-0000-0000-000000000000')
+  AND (p.created_by IS NULL OR pp.user_id != p.created_by)
   AND p.ended_at IS NOT NULL
 GROUP BY p.catalog_game_id, pp.user_id;
 ```
@@ -878,10 +883,10 @@ Taux de victoire sur ce jeu · Score moyen/max/min · Évolution scores (graphiq
   Champ "Commentaire" (optionnel)
 
   "Enregistrer les résultats"
-    → UPDATE play_participants SET score, is_winner
-    → UPDATE play_teams SET score, is_winner
+    → UPDATE play_participants SET score  (is_winner recalculé automatiquement par trigger DB)
+    → UPDATE play_teams SET score         (is_winner propagé aux membres par trigger DB)
     → UPDATE plays SET comment
-    → Si championship_id : calcul championship_points (voir Module 3)
+    → Si championship_id : calcul championship_points côté client → UPDATE play_participants
     → Toast "Partie enregistrée ✓"
 ```
 
@@ -1008,7 +1013,7 @@ Un **championnat** est une compétition en format championnat (round-robin libre
 
 La présélection des jeux fonctionne en deux phases :
 
-**Phase 1 — Suggestions (tous les participants) :** tout participant connecté peut suggérer des jeux depuis le catalogue global. Les suggestions ont le statut `suggested`.
+**Phase 1 — Suggestions (tous les participants) :** tout participant connecté peut suggérer des jeux parmi ceux présents dans la collection (statuts `owned`, `lent` ou `borrowed`) d'au moins un membre du championnat. Les suggestions ont le statut `suggested`. Seuls les jeux physiquement disponibles dans le groupe sont suggérables.
 
 **Phase 2 — Validation (créateur uniquement) :** le créateur examine les suggestions et les approuve (`approved`) ou les rejette (`rejected`). Seuls les jeux `approved` figurent dans la liste officielle du championnat.
 
@@ -1087,21 +1092,27 @@ Enregistrés ou provisionnés uniquement. Min 2. Ajout possible en `active`. Ret
 **Source des jeux suggérables :** uniquement les jeux présents dans la `collection_entries` d'au moins un participant au championnat (statut `owned`, `lent` ou `borrowed` — pas `wishlist` ni `sold` car le jeu n'est pas disponible). La requête de recherche lors de la suggestion est :
 
 ```sql
+-- Jeux suggérables : présents dans la collection d'au moins un participant
+-- (enregistré direct OU provisionné lié à un compte)
 SELECT DISTINCT gc.*
 FROM game_catalog gc
-JOIN collection_entries ce ON ce.catalog_game_id = gc.id
-JOIN championship_players cp ON cp.user_id = ce.user_id
-  -- Inclure aussi les participants provisionnés liés à un compte
-  OR (cp.provisioned_player_id IS NOT NULL AND EXISTS (
-    SELECT 1 FROM provisioned_players pv
-    WHERE pv.id = cp.provisioned_player_id
-      AND pv.linked_user_id = ce.user_id
-  ))
-WHERE cp.championship_id = {championship_id}
-  AND ce.status IN ('owned', 'lent', 'borrowed')
-  AND gc.id NOT IN (
+WHERE gc.id NOT IN (
     SELECT catalog_game_id FROM championship_games
     WHERE championship_id = {championship_id}
+  )
+  AND EXISTS (
+    SELECT 1 FROM collection_entries ce
+    JOIN championship_players cp ON cp.user_id = ce.user_id
+    WHERE cp.championship_id = {championship_id}
+      AND ce.catalog_game_id = gc.id
+      AND ce.status IN ('owned', 'lent', 'borrowed')
+    UNION
+    SELECT 1 FROM collection_entries ce
+    JOIN provisioned_players pv ON pv.linked_user_id = ce.user_id
+    JOIN championship_players cp ON cp.provisioned_player_id = pv.id
+    WHERE cp.championship_id = {championship_id}
+      AND ce.catalog_game_id = gc.id
+      AND ce.status IN ('owned', 'lent', 'borrowed')
   )
 ```
 
@@ -1255,7 +1266,15 @@ ALTER TABLE championship_players ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "cp_select" ON championship_players FOR SELECT TO authenticated
   USING (EXISTS (
     SELECT 1 FROM championships c WHERE c.id = championship_players.championship_id
-    AND (c.created_by = auth.uid() OR championship_players.user_id = auth.uid())
+    AND (
+      c.created_by = auth.uid()
+      OR championship_players.user_id = auth.uid()
+      OR EXISTS (
+        SELECT 1 FROM provisioned_players pv
+        WHERE pv.id = championship_players.provisioned_player_id
+          AND pv.linked_user_id = auth.uid()
+      )
+    )
   ));
 CREATE POLICY "cp_insert" ON championship_players FOR INSERT TO authenticated
   WITH CHECK (EXISTS (
@@ -1569,4 +1588,4 @@ Pas de barre de progression ni d'objectif — le nombre de parties est informati
 
 ---
 
-*Fin de la version 0.8 — document relu et consolidé. Prêt pour l'implémentation.*
+*Fin de la version 0.9 — spec et script de migration synchronisés. Prêt pour l'implémentation React.*
