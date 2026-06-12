@@ -50,16 +50,15 @@ export default function LoginPage() {
               required
               autoComplete="current-password"
             />
-            <Button type="submit" disabled={loading} className="mt-2 w-full">
+            <div className="flex justify-end -mt-1">
+              <Link to="/forgot-password" className="text-xs text-zinc-500 hover:text-amber-400 transition-colors">
+                Mot de passe oublié ?
+              </Link>
+            </div>
+            <Button type="submit" disabled={loading} className="w-full">
               {loading ? 'Connexion…' : 'Se connecter'}
             </Button>
           </form>
-          <p className="mt-4 text-center text-sm text-zinc-400">
-            Pas encore de compte ?{' '}
-            <Link to="/register" className="text-amber-400 hover:underline">
-              Créer un compte
-            </Link>
-          </p>
         </div>
       </div>
     </div>

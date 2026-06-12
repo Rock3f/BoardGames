@@ -1,11 +1,13 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMyPlays, useDeletePlay } from '../../hooks/usePlays'
 import { useActivePlayCtx } from '../../context/ActivePlayContext'
 import { PlayCard } from '../../components/plays/PlayCard'
 import { NewPlayModal } from '../../components/plays/NewPlayModal'
+import { EditPlayModal } from '../../components/plays/EditPlayModal'
 import { Spinner } from '../../components/ui/Spinner'
 import { useToast } from '../../components/ui/Toast'
+import { useAuth } from '../../context/AuthContext'
 
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })
@@ -126,9 +128,123 @@ function ActiveTab({ activePlay, onNewPlay }) {
   )
 }
 
+// ── Filters ───────────────────────────────────────────────────────────────────
+
+function HistoryFilters({ plays, filters, setFilters }) {
+  // Derive unique game titles and player names from plays
+  const games = useMemo(() => {
+    const seen = new Map()
+    for (const p of plays ?? []) {
+      if (p.game?.id && !seen.has(p.game.id)) seen.set(p.game.id, p.game.title)
+    }
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1], 'fr'))
+  }, [plays])
+
+  const players = useMemo(() => {
+    const seen = new Map()
+    for (const p of plays ?? []) {
+      for (const pp of p.play_participants ?? []) {
+        if (pp.displayName && !seen.has(pp.displayName)) seen.set(pp.displayName, pp.displayName)
+      }
+    }
+    return [...seen.keys()].sort((a, b) => a.localeCompare(b, 'fr'))
+  }, [plays])
+
+  const months = useMemo(() => {
+    const seen = new Map()
+    for (const p of plays ?? []) {
+      const d = new Date(p.started_at)
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+      if (!seen.has(key)) {
+        const label = d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })
+        seen.set(key, label)
+      }
+    }
+    return [...seen.entries()].sort((a, b) => b[0].localeCompare(a[0]))
+  }, [plays])
+
+  const hasFilters = filters.gameId || filters.playerName || filters.month
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex gap-2 flex-wrap">
+        <select
+          value={filters.gameId ?? ''}
+          onChange={e => setFilters(f => ({ ...f, gameId: e.target.value || null }))}
+          className={`flex-1 min-w-0 px-3 py-2 rounded-xl border text-sm bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400 transition-colors ${
+            filters.gameId ? 'border-amber-400 text-amber-400' : 'border-zinc-700 text-zinc-400'
+          }`}
+        >
+          <option value="">Tous les jeux</option>
+          {games.map(([id, title]) => (
+            <option key={id} value={id}>{title}</option>
+          ))}
+        </select>
+
+        <select
+          value={filters.playerName ?? ''}
+          onChange={e => setFilters(f => ({ ...f, playerName: e.target.value || null }))}
+          className={`flex-1 min-w-0 px-3 py-2 rounded-xl border text-sm bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400 transition-colors ${
+            filters.playerName ? 'border-amber-400 text-amber-400' : 'border-zinc-700 text-zinc-400'
+          }`}
+        >
+          <option value="">Tous les joueurs</option>
+          {players.map(name => (
+            <option key={name} value={name}>{name}</option>
+          ))}
+        </select>
+      </div>
+
+      <div className="flex gap-2 items-center">
+        <select
+          value={filters.month ?? ''}
+          onChange={e => setFilters(f => ({ ...f, month: e.target.value || null }))}
+          className={`flex-1 px-3 py-2 rounded-xl border text-sm bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400 transition-colors capitalize ${
+            filters.month ? 'border-amber-400 text-amber-400' : 'border-zinc-700 text-zinc-400'
+          }`}
+        >
+          <option value="">Toutes les périodes</option>
+          {months.map(([key, label]) => (
+            <option key={key} value={key} className="capitalize">{label}</option>
+          ))}
+        </select>
+
+        {hasFilters && (
+          <button
+            onClick={() => setFilters({ gameId: null, playerName: null, month: null })}
+            className="shrink-0 px-3 py-2 rounded-xl border border-zinc-700 text-xs text-zinc-500 hover:text-zinc-300 hover:border-zinc-500 transition-colors"
+          >
+            Réinitialiser
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── History tab ───────────────────────────────────────────────────────────────
 
-function HistoryTab({ plays, isLoading, onDelete }) {
+function HistoryTab({ plays, isLoading, onDelete, onEdit, uid }) {
+  const [filters, setFilters] = useState({ gameId: null, playerName: null, month: null })
+
+  const filtered = useMemo(() => {
+    let arr = plays ?? []
+    if (filters.gameId) arr = arr.filter(p => p.catalog_game_id === filters.gameId)
+    if (filters.playerName) {
+      arr = arr.filter(p =>
+        (p.play_participants ?? []).some(pp => pp.displayName === filters.playerName)
+      )
+    }
+    if (filters.month) {
+      arr = arr.filter(p => {
+        const d = new Date(p.started_at)
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        return key === filters.month
+      })
+    }
+    return arr
+  }, [plays, filters])
+
   if (isLoading) {
     return <div className="flex justify-center py-16"><Spinner className="w-8 h-8" /></div>
   }
@@ -144,26 +260,37 @@ function HistoryTab({ plays, isLoading, onDelete }) {
     )
   }
 
-  const groups = groupByMonth(plays)
+  const groups = groupByMonth(filtered)
 
   return (
-    <div className="flex flex-col gap-5">
-      {groups.map(group => (
-        <div key={group.key} className="flex flex-col gap-3">
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wide capitalize">
-              {group.label}
-            </span>
-            <span className="text-xs text-zinc-600">
-              {group.plays.length} partie{group.plays.length !== 1 ? 's' : ''}
-            </span>
-            <div className="flex-1 h-px bg-zinc-800" />
+    <div className="flex flex-col gap-4">
+      <HistoryFilters plays={plays} filters={filters} setFilters={setFilters} />
+
+      {filtered.length === 0 ? (
+        <p className="text-center text-sm text-zinc-500 py-8">Aucune partie pour ces filtres.</p>
+      ) : (
+        groups.map(group => (
+          <div key={group.key} className="flex flex-col gap-3">
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wide capitalize">
+                {group.label}
+              </span>
+              <span className="text-xs text-zinc-600">
+                {group.plays.length} partie{group.plays.length !== 1 ? 's' : ''}
+              </span>
+              <div className="flex-1 h-px bg-zinc-800" />
+            </div>
+            {group.plays.map(play => (
+              <PlayCard
+                key={play.id}
+                play={play}
+                onDelete={onDelete}
+                onEdit={play.created_by === uid ? onEdit : undefined}
+              />
+            ))}
           </div>
-          {group.plays.map(play => (
-            <PlayCard key={play.id} play={play} onDelete={onDelete} />
-          ))}
-        </div>
-      ))}
+        ))
+      )}
     </div>
   )
 }
@@ -173,6 +300,7 @@ function HistoryTab({ plays, isLoading, onDelete }) {
 export default function PlaysPage() {
   const toast = useToast()
   const navigate = useNavigate()
+  const { session } = useAuth()
   const { activePlay } = useActivePlayCtx()
   const { data, isLoading } = useMyPlays()
   const deletePlay = useDeletePlay()
@@ -180,6 +308,7 @@ export default function PlaysPage() {
   const [tab, setTab] = useState(activePlay ? 'active' : 'history')
   const [newOpen, setNewOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(null)
+  const [editPlay, setEditPlay] = useState(null)
 
   async function handleDelete(id) {
     try {
@@ -217,7 +346,13 @@ export default function PlaysPage() {
       )}
 
       {tab === 'history' && (
-        <HistoryTab plays={data} isLoading={isLoading} onDelete={id => setConfirmDelete(id)} />
+        <HistoryTab
+          plays={data}
+          isLoading={isLoading}
+          onDelete={id => setConfirmDelete(id)}
+          onEdit={setEditPlay}
+          uid={session?.user?.id}
+        />
       )}
 
       {/* Delete confirmation */}
@@ -240,6 +375,11 @@ export default function PlaysPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Edit play modal */}
+      {editPlay && (
+        <EditPlayModal play={editPlay} onClose={() => setEditPlay(null)} />
       )}
 
       {/* FAB */}

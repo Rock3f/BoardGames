@@ -158,7 +158,8 @@ export function useSaveScores() {
   const qc = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ playId, participantScores, teamScores, comment, rounds, startedAt }) => {
+    // championshipPoints: [{ participantId, points }] — optional, only for championship plays
+    mutationFn: async ({ playId, participantScores, teamScores, comment, rounds, championshipPoints }) => {
       const now = new Date().toISOString()
 
       // Update individual participant scores (sequential to avoid trigger deadlock)
@@ -175,6 +176,16 @@ export function useSaveScores() {
           score: score !== '' && score !== null && score !== undefined ? Number(score) : null,
         }).eq('id', id)
         if (error) throw error
+      }
+
+      // Save championship points per participant
+      if (championshipPoints?.length > 0) {
+        for (const { participantId, points } of championshipPoints) {
+          const { error } = await supabase.from('play_participants').update({
+            championship_points: points !== null && points !== undefined ? Number(points) : null,
+          }).eq('id', participantId)
+          if (error) throw error
+        }
       }
 
       // Close the play: set ended_at, comment, rounds
@@ -194,6 +205,39 @@ export function useSaveScores() {
       qc.invalidateQueries({ queryKey: ['play-details', variables.playId] })
       qc.invalidateQueries({ queryKey: ['plays'] })
       qc.invalidateQueries({ queryKey: ['active-play'] })
+      qc.invalidateQueries({ queryKey: ['championship-standings'] })
+    },
+  })
+}
+
+export function useUpdatePlay() {
+  const qc = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ playId, participantScores, teamScores, comment }) => {
+      // Sequential updates to avoid trigger deadlocks (same pattern as useSaveScores)
+      for (const { id, score } of participantScores) {
+        const { error } = await supabase.from('play_participants').update({
+          score: score !== '' && score !== null && score !== undefined ? Number(score) : null,
+        }).eq('id', id)
+        if (error) throw error
+      }
+      for (const { id, score } of teamScores) {
+        const { error } = await supabase.from('play_teams').update({
+          score: score !== '' && score !== null && score !== undefined ? Number(score) : null,
+        }).eq('id', id)
+        if (error) throw error
+      }
+      const { error } = await supabase
+        .from('plays')
+        .update({ comment: comment || null })
+        .eq('id', playId)
+      if (error) throw error
+    },
+    onSuccess: (_data, { playId }) => {
+      qc.invalidateQueries({ queryKey: ['play-details', playId] })
+      qc.invalidateQueries({ queryKey: ['plays'] })
+      qc.invalidateQueries({ queryKey: ['championship-standings'] })
     },
   })
 }
@@ -207,6 +251,37 @@ export function useDeletePlay() {
       if (error) throw error
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['plays'] }),
+  })
+}
+
+export function useChampionshipPlays(championshipId) {
+  return useQuery({
+    queryKey: ['championship-plays', championshipId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('plays')
+        .select(`
+          id, created_by, catalog_game_id, win_rule,
+          started_at, ended_at, duration_min, comment,
+          game:game_catalog(id, title, cover_url),
+          play_teams(id, name, score, is_winner),
+          play_participants(id, play_team_id, user_id, provisioned_player_id, guest_player_id, score, is_winner, championship_points)
+        `)
+        .eq('championship_id', championshipId)
+        .not('ended_at', 'is', null)
+        .order('started_at', { ascending: false })
+      if (error) throw error
+
+      const allParticipants = (data ?? []).flatMap(p => p.play_participants ?? [])
+      if (allParticipants.length === 0) return data ?? []
+      const enriched = await enrichParticipants(allParticipants)
+      const enrichedMap = new Map(enriched.map(p => [p.id, p]))
+      return (data ?? []).map(play => ({
+        ...play,
+        play_participants: (play.play_participants ?? []).map(p => enrichedMap.get(p.id) ?? p),
+      }))
+    },
+    enabled: !!championshipId,
   })
 }
 

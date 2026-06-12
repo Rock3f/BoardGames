@@ -6,13 +6,13 @@ import { ToastProvider } from './components/ui/Toast'
 import { Spinner } from './components/ui/Spinner'
 import AppLayout from './components/layout/AppLayout'
 import LoginPage from './pages/auth/LoginPage'
-import RegisterPage from './pages/auth/RegisterPage'
+import ForgotPasswordPage from './pages/auth/ForgotPasswordPage'
+import ResetPasswordPage from './pages/auth/ResetPasswordPage'
 import CollectionPage from './pages/collection/CollectionPage'
 import CatalogPage from './pages/catalog/CatalogPage'
 import PlaysPage from './pages/plays/PlaysPage'
 import ChampionshipsPage from './pages/championships/ChampionshipsPage'
 import ChampionshipDetailPage from './pages/championships/ChampionshipDetailPage'
-import NewChampionshipPage from './pages/championships/NewChampionshipPage'
 import ProfilePage from './pages/players/ProfilePage'
 import DirectoryPage from './pages/players/DirectoryPage'
 import PlayerPage from './pages/players/PlayerPage'
@@ -35,9 +35,10 @@ function LoadingScreen() {
 }
 
 function ProtectedLayout() {
-  const { session, loading } = useAuth()
+  const { session, loading, isPasswordRecovery } = useAuth()
   if (loading) return <LoadingScreen />
   if (!session) return <Navigate to="/login" replace />
+  if (isPasswordRecovery) return <Navigate to="/reset-password" replace />
   return (
     <ActivePlayProvider>
       <AppLayout />
@@ -56,14 +57,15 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<GuestRoute><LoginPage /></GuestRoute>} />
-      <Route path="/register" element={<GuestRoute><RegisterPage /></GuestRoute>} />
+      <Route path="/forgot-password" element={<GuestRoute><ForgotPasswordPage /></GuestRoute>} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route element={<ProtectedLayout />}>
         <Route index element={<CollectionPage />} />
         <Route path="/catalog" element={<CatalogPage />} />
         <Route path="/plays" element={<PlaysPage />} />
         <Route path="/play/active" element={<ActivePlayPage />} />
         <Route path="/championships" element={<ChampionshipsPage />} />
-        <Route path="/championships/new" element={<NewChampionshipPage />} />
+        <Route path="/championships/new" element={<Navigate to="/championships" replace />} />
         <Route path="/championships/:id" element={<ChampionshipDetailPage />} />
         <Route path="/directory" element={<DirectoryPage />} />
         <Route path="/players/:id" element={<PlayerPage />} />

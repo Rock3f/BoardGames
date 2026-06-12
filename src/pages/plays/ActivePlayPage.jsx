@@ -3,8 +3,33 @@ import { useNavigate } from 'react-router-dom'
 import { Spinner } from '../../components/ui/Spinner'
 import { Button } from '../../components/ui/Button'
 import { usePlayDetails, useSaveScores, calcWinners } from '../../hooks/usePlays'
+import { useChampionship } from '../../hooks/useChampionships'
 import { useActivePlayCtx } from '../../context/ActivePlayContext'
 import { useToast } from '../../components/ui/Toast'
+
+// Compute initial championship points from sorted standings and scoring config
+function calcChampPoints(standings, scoring, winRule) {
+  if (!scoring) return {}
+  const mode = scoring.mode ?? 'by_result'
+  if (mode === 'by_rank') {
+    const table = Object.fromEntries((scoring.by_rank ?? []).map(r => [r.rank, r.points]))
+    let prevScore = undefined
+    let rank = 0
+    let tieStart = 1
+    return Object.fromEntries(
+      standings.map((e, i) => {
+        if (e.score !== prevScore) { rank = i + 1; tieStart = rank; prevScore = e.score }
+        return [e.id, table[tieStart] ?? 0]
+      })
+    )
+  }
+  // by_result
+  const { win = 3, draw = 1, loss = 0 } = scoring.by_result ?? {}
+  const winnerCount = standings.filter(e => e.is_winner).length
+  return Object.fromEntries(
+    standings.map(e => [e.id, e.is_winner ? (winnerCount > 1 ? draw : win) : loss])
+  )
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -251,11 +276,13 @@ export default function ActivePlayPage() {
   const toast = useToast()
   const { activePlay, elapsed, clearActivePlay } = useActivePlayCtx()
   const { data: play, isLoading } = usePlayDetails(activePlay?.id)
+  const { data: championship } = useChampionship(play?.championship_id)
   const saveScores = useSaveScores()
 
   const [rounds, setRounds] = useState(null)
   const [comment, setComment] = useState('')
   const [confirmEnd, setConfirmEnd] = useState(false)
+  const [champPoints, setChampPoints] = useState(null)
 
   useEffect(() => {
     if (!activePlay) navigate('/plays', { replace: true })
@@ -271,13 +298,15 @@ export default function ActivePlayPage() {
   const hasTeams = (play?.play_teams?.length ?? 0) > 0
   const entities = useMemo(() => {
     if (!play) return []
-    return hasTeams
-      ? (play.play_teams ?? [])
-      : (play.play_participants ?? []).filter(p => !p.play_team_id)
+    if (!hasTeams) return (play.play_participants ?? []).filter(p => !p.play_team_id).map(p => ({ ...p, _type: 'participant' }))
+    // Mixed: teams + solo participants (not assigned to any team)
+    const teams = (play.play_teams ?? []).map(t => ({ ...t, _type: 'team' }))
+    const solos = (play.play_participants ?? []).filter(p => !p.play_team_id).map(p => ({ ...p, _type: 'participant' }))
+    return [...teams, ...solos]
   }, [play, hasTeams])
 
   function getLabel(e) {
-    if (hasTeams) {
+    if (e._type === 'team') {
       const members = play?.play_participants?.filter(p => p.play_team_id === e.id) ?? []
       return e.name ? `${e.name} (${members.map(m => m.displayName).join(', ')})` : members.map(m => m.displayName).join(', ') || 'Équipe'
     }
@@ -285,13 +314,12 @@ export default function ActivePlayPage() {
   }
 
   function getShortLabel(e) {
-    if (hasTeams) return e.name || 'Équipe'
-    const name = e.displayName ?? '?'
-    return name.split(' ')[0]
+    if (e._type === 'team') return e.name || 'Équipe'
+    return (e.displayName ?? '?').split(' ')[0]
   }
 
   function getAvatarUrl(e) {
-    if (hasTeams) return null
+    if (e._type === 'team') return null
     return e.avatar_url ?? null
   }
 
@@ -325,16 +353,47 @@ export default function ActivePlayPage() {
     })
   }
 
+  function openConfirm() {
+    // Auto-calculate championship points when opening the dialog
+    if (play?.championship_id && championship?.scoring) {
+      setChampPoints(calcChampPoints(standings, championship.scoring, play.win_rule))
+    }
+    setConfirmEnd(true)
+  }
+
   async function handleEnd() {
     if (!play || !rounds) return
     try {
-      const participantScores = hasTeams
-        ? (play.play_participants ?? []).map(p => ({ id: p.id, score: null }))
-        : entities.map(e => ({ id: e.id, score: totals[e.id] ?? null }))
+      // Participants: team members get null (score on team), solos get their score
+      const participantScores = entities.flatMap(e => {
+        if (e._type === 'team') {
+          return (play.play_participants ?? [])
+            .filter(p => p.play_team_id === e.id)
+            .map(p => ({ id: p.id, score: null }))
+        }
+        return [{ id: e.id, score: totals[e.id] ?? null }]
+      })
 
-      const teamScores = hasTeams
-        ? entities.map(e => ({ id: e.id, score: totals[e.id] ?? null }))
-        : []
+      const teamScores = entities
+        .filter(e => e._type === 'team')
+        .map(e => ({ id: e.id, score: totals[e.id] ?? null }))
+
+      // Build championship_points array: map entity (team or individual) → participant ids
+      let championshipPoints = null
+      if (play.championship_id && champPoints) {
+        championshipPoints = []
+        for (const e of entities) {
+          const pts = champPoints[e.id] ?? 0
+          if (e._type === 'team') {
+            const members = (play.play_participants ?? []).filter(p => p.play_team_id === e.id)
+            for (const m of members) {
+              championshipPoints.push({ participantId: m.id, points: pts })
+            }
+          } else {
+            championshipPoints.push({ participantId: e.id, points: pts })
+          }
+        }
+      }
 
       await saveScores.mutateAsync({
         playId: play.id,
@@ -342,7 +401,7 @@ export default function ActivePlayPage() {
         teamScores,
         comment,
         rounds,
-        startedAt: play.started_at,
+        championshipPoints,
       })
       clearActivePlay()
       toast.success('Partie enregistrée !')
@@ -455,7 +514,7 @@ export default function ActivePlayPage() {
         <div className="pb-4">
           <button
             type="button"
-            onClick={() => setConfirmEnd(true)}
+            onClick={openConfirm}
             className="w-full flex items-center justify-center gap-2.5 py-4 rounded-2xl bg-amber-400 text-zinc-950 text-base font-bold hover:bg-amber-300 active:scale-[0.98] transition-all shadow-lg shadow-amber-400/20"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -497,6 +556,35 @@ export default function ActivePlayPage() {
                 </div>
               ))}
             </div>
+
+            {/* Championship points (only when linked to a championship) */}
+            {play.championship_id && championship?.scoring && champPoints && (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <svg className="w-4 h-4 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 18.75h-9m9 0a3 3 0 013 3h-15a3 3 0 013-3m9 0v-4.5M7.5 18.75v-4.5M3 5.25h18M5.25 5.25v7.5a6.75 6.75 0 0013.5 0v-7.5" />
+                  </svg>
+                  <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wide">Points championnat</p>
+                </div>
+                <div className="bg-zinc-800 rounded-2xl overflow-hidden divide-y divide-zinc-700/50">
+                  {standings.map(e => (
+                    <div key={e.id} className="flex items-center gap-3 px-3 py-2">
+                      <span className={`flex-1 text-sm truncate ${e.is_winner ? 'text-amber-400 font-medium' : 'text-zinc-300'}`}>
+                        {getLabel(e)}
+                      </span>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        value={champPoints[e.id] ?? 0}
+                        onChange={ev => setChampPoints(prev => ({ ...prev, [e.id]: ev.target.value === '' ? 0 : Number(ev.target.value) }))}
+                        className="w-16 rounded-lg border border-zinc-600 bg-zinc-700 px-2 py-1 text-sm text-center font-bold text-zinc-100 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent"
+                      />
+                      <span className="text-xs text-zinc-500 shrink-0">pts</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="flex gap-2.5">
               <Button variant="secondary" onClick={() => setConfirmEnd(false)} className="flex-1">

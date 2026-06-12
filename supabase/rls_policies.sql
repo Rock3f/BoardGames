@@ -174,6 +174,33 @@ CREATE POLICY "pp_delete" ON play_participants FOR DELETE TO authenticated
   ));
 
 
+-- ── Helpers SECURITY DEFINER (brisent la récursion RLS circulaire) ────────────
+-- champ_select lit championship_players, cp_select lit championships → boucle.
+-- Ces fonctions lisent chaque table sans déclencher les politiques RLS.
+
+CREATE OR REPLACE FUNCTION public.owns_championship(champ_id uuid)
+RETURNS boolean LANGUAGE sql SECURITY DEFINER STABLE
+SET search_path = public AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM championships WHERE id = champ_id AND created_by = auth.uid()
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.in_championship(champ_id uuid)
+RETURNS boolean LANGUAGE sql SECURITY DEFINER STABLE
+SET search_path = public AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM championship_players cp
+    WHERE cp.championship_id = champ_id
+      AND (cp.user_id = auth.uid()
+           OR EXISTS (
+             SELECT 1 FROM provisioned_players pv
+             WHERE pv.id = cp.provisioned_player_id AND pv.linked_user_id = auth.uid()
+           ))
+  );
+$$;
+
+
 -- ── championships ─────────────────────────────────────────────
 ALTER TABLE championships ENABLE ROW LEVEL SECURITY;
 
@@ -182,18 +209,9 @@ DROP POLICY IF EXISTS "champ_insert" ON championships;
 DROP POLICY IF EXISTS "champ_update" ON championships;
 DROP POLICY IF EXISTS "champ_delete" ON championships;
 
+-- Utilise in_championship() pour éviter la référence directe à championship_players
 CREATE POLICY "champ_select" ON championships FOR SELECT TO authenticated
-  USING (
-    auth.uid() = created_by
-    OR EXISTS (
-      SELECT 1 FROM championship_players cp
-      WHERE cp.championship_id = championships.id
-        AND (cp.user_id = auth.uid()
-             OR EXISTS (SELECT 1 FROM provisioned_players pv
-                        WHERE pv.id = cp.provisioned_player_id
-                          AND pv.linked_user_id = auth.uid()))
-    )
-  );
+  USING (auth.uid() = created_by OR in_championship(championships.id));
 CREATE POLICY "champ_insert" ON championships FOR INSERT TO authenticated
   WITH CHECK (auth.uid() = created_by);
 CREATE POLICY "champ_update" ON championships FOR UPDATE TO authenticated
@@ -209,29 +227,26 @@ DROP POLICY IF EXISTS "cp_select" ON championship_players;
 DROP POLICY IF EXISTS "cp_insert" ON championship_players;
 DROP POLICY IF EXISTS "cp_delete" ON championship_players;
 
+-- Utilise owns_championship() pour éviter la référence directe à championships
 CREATE POLICY "cp_select" ON championship_players FOR SELECT TO authenticated
-  USING (EXISTS (
-    SELECT 1 FROM championships c WHERE c.id = championship_players.championship_id
-    AND (
-      c.created_by = auth.uid()
-      OR championship_players.user_id = auth.uid()
-      OR EXISTS (
-        SELECT 1 FROM provisioned_players pv
-        WHERE pv.id = championship_players.provisioned_player_id
-          AND pv.linked_user_id = auth.uid()
-      )
+  USING (
+    user_id = auth.uid()
+    OR owns_championship(championship_players.championship_id)
+    OR EXISTS (
+      SELECT 1 FROM provisioned_players pv
+      WHERE pv.id = championship_players.provisioned_player_id
+        AND pv.linked_user_id = auth.uid()
     )
-  ));
+  );
 CREATE POLICY "cp_insert" ON championship_players FOR INSERT TO authenticated
-  WITH CHECK (EXISTS (
-    SELECT 1 FROM championships c WHERE c.id = championship_players.championship_id
-    AND c.created_by = auth.uid()
-  ));
+  WITH CHECK (owns_championship(championship_players.championship_id));
 CREATE POLICY "cp_delete" ON championship_players FOR DELETE TO authenticated
-  USING (EXISTS (
-    SELECT 1 FROM championships c WHERE c.id = championship_players.championship_id
-    AND c.created_by = auth.uid() AND c.status = 'draft'
-  ));
+  USING (
+    owns_championship(championship_players.championship_id)
+    AND EXISTS (
+      SELECT 1 FROM championships WHERE id = championship_players.championship_id AND status = 'draft'
+    )
+  );
 
 
 -- ── championship_games ────────────────────────────────────────
@@ -242,40 +257,74 @@ DROP POLICY IF EXISTS "cg_suggest" ON championship_games;
 DROP POLICY IF EXISTS "cg_manage"  ON championship_games;
 DROP POLICY IF EXISTS "cg_delete"  ON championship_games;
 
+-- Utilise owns_championship / in_championship pour éviter toute récursion RLS
 CREATE POLICY "cg_select" ON championship_games FOR SELECT TO authenticated
-  USING (EXISTS (
-    SELECT 1 FROM championships c
-    LEFT JOIN championship_players cp ON cp.championship_id = c.id
-    WHERE c.id = championship_games.championship_id
-      AND (c.created_by = auth.uid() OR cp.user_id = auth.uid())
-  ));
+  USING (
+    owns_championship(championship_games.championship_id)
+    OR in_championship(championship_games.championship_id)
+  );
+
 CREATE POLICY "cg_suggest" ON championship_games FOR INSERT TO authenticated
   WITH CHECK (
     auth.uid() = suggested_by
     AND status = 'suggested'
-    AND EXISTS (
-      SELECT 1 FROM championship_players cp
-      WHERE cp.championship_id = championship_games.championship_id
-        AND cp.user_id = auth.uid()
-    )
+    AND in_championship(championship_games.championship_id)
     AND EXISTS (
       SELECT 1 FROM collection_entries ce
-      JOIN championship_players cp2 ON cp2.user_id = ce.user_id
-      WHERE cp2.championship_id = championship_games.championship_id
-        AND ce.catalog_game_id = championship_games.catalog_game_id
+      JOIN championship_players cp ON cp.user_id = ce.user_id
+        AND cp.championship_id = championship_games.championship_id
+      WHERE ce.catalog_game_id = championship_games.catalog_game_id
         AND ce.status IN ('owned', 'lent', 'borrowed')
     )
   );
+
 CREATE POLICY "cg_manage" ON championship_games FOR UPDATE TO authenticated
-  USING (EXISTS (
-    SELECT 1 FROM championships c WHERE c.id = championship_games.championship_id
-    AND c.created_by = auth.uid()
-  ));
+  USING (owns_championship(championship_games.championship_id));
+
 CREATE POLICY "cg_delete" ON championship_games FOR DELETE TO authenticated
-  USING (EXISTS (
-    SELECT 1 FROM championships c WHERE c.id = championship_games.championship_id
-    AND c.created_by = auth.uid() AND c.status = 'draft'
-  ));
+  USING (
+    owns_championship(championship_games.championship_id)
+    AND EXISTS (
+      SELECT 1 FROM championships
+      WHERE id = championship_games.championship_id AND status = 'draft'
+    )
+  );
+
+
+-- ── add_championship_players (RPC — contourne le conflit de clé unique) ──────
+-- Insère le créateur + participants extra. ON CONFLICT DO NOTHING évite
+-- l'erreur cp_unique_user quelle que soit la définition exacte de la contrainte.
+CREATE OR REPLACE FUNCTION public.add_championship_players(
+  p_championship_id uuid,
+  p_user_ids        uuid[],
+  p_provisioned_ids uuid[]
+)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public AS $$
+BEGIN
+  -- Vérification : l'appelant doit être le créateur du championnat
+  IF NOT EXISTS (
+    SELECT 1 FROM championships
+    WHERE id = p_championship_id AND created_by = auth.uid()
+  ) THEN
+    RAISE EXCEPTION 'unauthorized';
+  END IF;
+
+  -- Participants réels (user_id)
+  INSERT INTO championship_players (championship_id, user_id)
+  SELECT p_championship_id, u
+  FROM unnest(COALESCE(p_user_ids, '{}')) AS u
+  ON CONFLICT DO NOTHING;
+
+  -- Joueurs provisionnés
+  INSERT INTO championship_players (championship_id, provisioned_player_id)
+  SELECT p_championship_id, p
+  FROM unnest(COALESCE(p_provisioned_ids, '{}')) AS p
+  ON CONFLICT DO NOTHING;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.add_championship_players TO authenticated;
 
 
 -- ============================================================

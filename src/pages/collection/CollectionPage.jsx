@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useMyCollection } from '../../hooks/useCollection'
+import { useMyCollection, useMyPlayCounts } from '../../hooks/useCollection'
 import { GameCard } from '../../components/collection/GameCard'
 import { GameEntryModal } from '../../components/collection/GameEntryModal'
 import { AddGameModal } from '../../components/collection/AddGameModal'
@@ -14,25 +14,57 @@ const STATUS_TABS = [
   { value: 'sold', label: 'Vendu' },
 ]
 
+const PLAYER_OPTIONS = [
+  { value: null, label: 'Joueurs' },
+  { value: 2, label: '2+' },
+  { value: 3, label: '3+' },
+  { value: 4, label: '4+' },
+  { value: 5, label: '5+' },
+]
+
+const DURATION_OPTIONS = [
+  { value: null, label: 'Durée' },
+  { value: 30, label: '≤ 30 min' },
+  { value: 60, label: '≤ 1h' },
+  { value: 90, label: '≤ 1h30' },
+  { value: 120, label: '≤ 2h' },
+]
+
 export default function CollectionPage() {
   const [activeStatus, setActiveStatus] = useState(null)
   const [search, setSearch] = useState('')
+  const [minPlayers, setMinPlayers] = useState(null)
+  const [maxDuration, setMaxDuration] = useState(null)
   const [editEntry, setEditEntry] = useState(null)
   const [addOpen, setAddOpen] = useState(false)
 
   const { data, isLoading, isError } = useMyCollection(activeStatus)
+  const { data: playCounts } = useMyPlayCounts()
 
   const filtered = useMemo(() => {
     if (!data) return []
-    if (!search.trim()) return data
-    const q = search.trim().toLowerCase()
-    return data.filter((e) => e.game?.title?.toLowerCase().includes(q))
-  }, [data, search])
+    let entries = data
+    if (search.trim()) {
+      const q = search.trim().toLowerCase()
+      entries = entries.filter((e) => e.game?.title?.toLowerCase().includes(q))
+    }
+    if (minPlayers) {
+      entries = entries.filter((e) => (e.game?.max_players ?? 0) >= minPlayers)
+    }
+    if (maxDuration) {
+      entries = entries.filter(
+        (e) => !e.game?.min_duration_min || e.game.min_duration_min <= maxDuration
+      )
+    }
+    return entries
+  }, [data, search, minPlayers, maxDuration])
 
   const collectionGameIds = useMemo(
     () => new Set((data ?? []).map((e) => e.game_id)),
     [data]
   )
+
+  const hasActiveFilters = minPlayers !== null || maxDuration !== null
 
   return (
     <div className="p-4 sm:p-6 flex flex-col gap-4 min-h-full">
@@ -75,6 +107,40 @@ export default function CollectionPage() {
         />
       </div>
 
+      {/* Advanced filters */}
+      <div className="flex gap-2 items-center flex-wrap">
+        <select
+          value={minPlayers ?? ''}
+          onChange={(e) => setMinPlayers(e.target.value ? Number(e.target.value) : null)}
+          className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400 ${
+            minPlayers ? 'border-amber-400 text-amber-400' : 'border-zinc-700 text-zinc-400'
+          }`}
+        >
+          {PLAYER_OPTIONS.map(({ value, label }) => (
+            <option key={label} value={value ?? ''}>{label}</option>
+          ))}
+        </select>
+        <select
+          value={maxDuration ?? ''}
+          onChange={(e) => setMaxDuration(e.target.value ? Number(e.target.value) : null)}
+          className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors bg-zinc-900 focus:outline-none focus:ring-2 focus:ring-amber-400 ${
+            maxDuration ? 'border-amber-400 text-amber-400' : 'border-zinc-700 text-zinc-400'
+          }`}
+        >
+          {DURATION_OPTIONS.map(({ value, label }) => (
+            <option key={label} value={value ?? ''}>{label}</option>
+          ))}
+        </select>
+        {hasActiveFilters && (
+          <button
+            onClick={() => { setMinPlayers(null); setMaxDuration(null) }}
+            className="px-3 py-1.5 rounded-full text-xs text-zinc-500 border border-zinc-700 hover:border-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            Réinitialiser
+          </button>
+        )}
+      </div>
+
       {/* Content */}
       {isLoading && (
         <div className="flex justify-center py-16"><Spinner className="w-8 h-8" /></div>
@@ -111,7 +177,12 @@ export default function CollectionPage() {
       {!isLoading && filtered.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           {filtered.map((entry) => (
-            <GameCard key={entry.id} entry={entry} onClick={setEditEntry} />
+            <GameCard
+              key={entry.id}
+              entry={entry}
+              onClick={setEditEntry}
+              playCount={playCounts?.[entry.catalog_game_id] ?? 0}
+            />
           ))}
         </div>
       )}

@@ -6,7 +6,7 @@ const CHAMP_SELECT = `
   id, created_by, name, description, status, scoring, tiebreak_order,
   starts_at, ends_at, created_at,
   championship_players(id, user_id, provisioned_player_id, joined_at),
-  championship_games(id, catalog_game_id, status, suggested_by, display_order, game:game_catalog(id, title, cover_url))
+  championship_games(id, catalog_game_id, status, suggested_by, display_order, game:game_catalog(id, title, cover_url, min_players, max_players, min_duration_min, max_duration_min))
 `
 
 // Enrich championship_players rows with displayName + avatarUrl
@@ -101,7 +101,7 @@ export function useMyActiveChampionships() {
   })
 }
 
-// Games owned by participants (for suggestion gallery, restricted per spec)
+// Games owned by participants — enriched with ownerIds + metadata
 export function useChampionshipAvailableGames(championship) {
   const userIds = (championship?.championship_players ?? [])
     .filter(p => p.user_id)
@@ -110,22 +110,39 @@ export function useChampionshipAvailableGames(championship) {
   return useQuery({
     queryKey: ['championship-available-games', championship?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
+      // Essaie avec les métadonnées étendues ; repli sur les champs de base si les colonnes n'existent pas
+      const FULL_SELECT = 'user_id, catalog_game_id, game:game_catalog(id, title, cover_url, year_published, min_players, max_players, min_duration_min, max_duration_min)'
+      const BASE_SELECT = 'user_id, catalog_game_id, game:game_catalog(id, title, cover_url, year_published)'
+
+      let result = await supabase
         .from('collection_entries')
-        .select('catalog_game_id, game:game_catalog(id, title, cover_url, year_published)')
+        .select(FULL_SELECT)
         .in('user_id', userIds)
         .neq('status', 'wishlist')
-      if (error) throw error
 
-      const seen = new Set()
-      return (data ?? [])
-        .filter(e => {
-          if (!e.game || seen.has(e.catalog_game_id)) return false
-          seen.add(e.catalog_game_id)
-          return true
-        })
-        .map(e => e.game)
-        .sort((a, b) => a.title.localeCompare(b.title))
+      if (result.error?.code === '42703' || result.error?.message?.includes('does not exist')) {
+        result = await supabase
+          .from('collection_entries')
+          .select(BASE_SELECT)
+          .in('user_id', userIds)
+          .neq('status', 'wishlist')
+      }
+
+      if (result.error) throw result.error
+
+      // Build game map with ownerIds (multiple participants may own the same game)
+      const gameMap = new Map()
+      for (const e of result.data ?? []) {
+        if (!e.game) continue
+        if (!gameMap.has(e.catalog_game_id)) {
+          gameMap.set(e.catalog_game_id, { ...e.game, ownerIds: [] })
+        }
+        gameMap.get(e.catalog_game_id).ownerIds.push(e.user_id)
+      }
+
+      return [...gameMap.values()].sort((a, b) =>
+        a.title.localeCompare(b.title, 'fr', { sensitivity: 'base' })
+      )
     },
     enabled: !!championship?.id && userIds.length > 0,
   })
@@ -152,7 +169,7 @@ export function useCreateChampionship() {
   const { session } = useAuth()
 
   return useMutation({
-    mutationFn: async ({ name, description, startsAt, endsAt, scoring, tiebreakOrder }) => {
+    mutationFn: async ({ name, description, startsAt, endsAt, scoring, tiebreakOrder, participants = [] }) => {
       const { data, error } = await supabase
         .from('championships')
         .insert({
@@ -163,6 +180,7 @@ export function useCreateChampionship() {
           ends_at: endsAt || null,
           scoring: scoring ?? {
             mode: 'by_result',
+            win_condition: 'highest',
             by_result: { win: 3, draw: 1, loss: 0 },
             by_rank: [],
             bonus_rules: [],
@@ -173,10 +191,18 @@ export function useCreateChampionship() {
         .single()
       if (error) throw error
 
-      await supabase.from('championship_players').insert({
-        championship_id: data.id,
-        user_id: session.user.id,
+      // Creator + additional participants (deduplicate creator if already in list)
+      const extraPlayers = participants.filter(p => !(p.type === 'user' && p.id === session.user.id))
+      const userIds = [session.user.id, ...extraPlayers.filter(p => p.type === 'user').map(p => p.id)]
+      const provisionedIds = extraPlayers.filter(p => p.type === 'provisioned').map(p => p.id)
+
+      // RPC SECURITY DEFINER → ON CONFLICT DO NOTHING, contourne cp_unique_user
+      const { error: ppErr } = await supabase.rpc('add_championship_players', {
+        p_championship_id: data.id,
+        p_user_ids: userIds,
+        p_provisioned_ids: provisionedIds,
       })
+      if (ppErr) throw ppErr
 
       return data
     },
@@ -265,6 +291,23 @@ export function useManageGame() {
       if (error) throw error
     },
     onSuccess: (_d, { championshipId }) => {
+      qc.invalidateQueries({ queryKey: ['championship', championshipId] })
+    },
+  })
+}
+
+export function useApproveAllPendingGames() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (championshipId) => {
+      const { error } = await supabase
+        .from('championship_games')
+        .update({ status: 'approved' })
+        .eq('championship_id', championshipId)
+        .eq('status', 'suggested')
+      if (error) throw error
+    },
+    onSuccess: (_d, championshipId) => {
       qc.invalidateQueries({ queryKey: ['championship', championshipId] })
     },
   })

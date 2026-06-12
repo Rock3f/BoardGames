@@ -26,7 +26,7 @@ function MetaChip({ children }) {
   return <span className="text-xs text-zinc-500">{children}</span>
 }
 
-export function GameCard({ entry, onClick }) {
+export function GameCard({ entry, onClick, playCount }) {
   const { game, status, rating } = entry
 
   const players =
@@ -73,10 +73,11 @@ export function GameCard({ entry, onClick }) {
           <StarRow rating={rating} />
         </div>
 
-        {(players || duration) && (
+        {(players || duration || playCount > 0) && (
           <div className="flex gap-2 flex-wrap">
             {players && <MetaChip>{players}</MetaChip>}
             {duration && <MetaChip>{duration}</MetaChip>}
+            {playCount > 0 && <MetaChip>📊 {playCount}</MetaChip>}
           </div>
         )}
       </div>

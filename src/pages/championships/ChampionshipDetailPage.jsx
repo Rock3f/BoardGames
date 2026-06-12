@@ -1,15 +1,17 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   useChampionship,
   useChampionshipStandings,
   useChampionshipAvailableGames,
   useTransitionChampionship,
+  useApproveAllPendingGames,
   useAddChampionshipPlayer,
   useRemoveChampionshipPlayer,
   useSuggestGame,
   useManageGame,
 } from '../../hooks/useChampionships'
+import { useChampionshipPlays } from '../../hooks/usePlays'
 import { usePlayerSearch } from '../../hooks/usePlayers'
 import { Spinner } from '../../components/ui/Spinner'
 import { Button } from '../../components/ui/Button'
@@ -21,12 +23,24 @@ function getInitials(name) {
   return (name ?? '?').trim().split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase()
 }
 
-const TABS = ['Classement', 'Jeux', 'Règles']
-
 // ─── Standings tab ────────────────────────────────────────────────────────────
 
 function StandingsTab({ championship }) {
-  const { data: standings, isLoading } = useChampionshipStandings(championship.id)
+  const { data: rawStandings, isLoading } = useChampionshipStandings(championship.id)
+  const winCondition = championship.scoring?.win_condition ?? 'highest'
+
+  const standings = useMemo(() => {
+    if (!rawStandings?.length) return rawStandings
+    if (winCondition === 'highest') return rawStandings
+
+    // lowest: re-trier par total_points croissant et recalculer les rangs
+    const sorted = [...rawStandings].sort((a, b) => a.total_points - b.total_points)
+    let rank = 1
+    return sorted.map((row, i) => {
+      if (i > 0 && sorted[i].total_points !== sorted[i - 1].total_points) rank = i + 1
+      return { ...row, rank }
+    })
+  }, [rawStandings, winCondition])
 
   if (isLoading) return <div className="flex justify-center py-10"><Spinner className="w-7 h-7" /></div>
 
@@ -75,6 +89,48 @@ const gameStatusConfig = {
   rejected:  { label: 'Refusé',     cls: 'text-zinc-500 bg-zinc-800 border-zinc-700' },
 }
 
+const DURATION_FILTERS = [
+  { key: 'all',    label: 'Toutes' },
+  { key: 'quick',  label: '< 30 min',  max: 30 },
+  { key: 'short',  label: '30–60 min', min: 30,  max: 60 },
+  { key: 'medium', label: '1–2 h',     min: 60,  max: 120 },
+  { key: 'long',   label: '2 h+',      min: 120 },
+]
+
+const PLAYERS_FILTERS = [
+  { key: 'all', label: 'Tous' },
+  { key: '2',   label: '2' },
+  { key: '3',   label: '3' },
+  { key: '4',   label: '4' },
+  { key: '5+',  label: '5+' },
+]
+
+const GAME_LIMIT = 12
+
+function FilterChips({ options, value, onChange }) {
+  return (
+    <div className="flex gap-1.5 flex-wrap">
+      {options.map(opt => (
+        <button
+          key={opt.key}
+          type="button"
+          onClick={() => onChange(opt.key)}
+          className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all border ${
+            value === opt.key
+              ? 'bg-amber-400 text-zinc-950 border-amber-400'
+              : 'bg-transparent text-zinc-500 border-zinc-700 hover:text-zinc-200 hover:border-zinc-500'
+          }`}
+        >
+          {opt.label}
+          {opt.count != null && (
+            <span className={`ml-1 ${value === opt.key ? 'opacity-60' : 'text-zinc-600'}`}>{opt.count}</span>
+          )}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function GamesTab({ championship }) {
   const toast = useToast()
   const { session } = useAuth()
@@ -83,14 +139,150 @@ function GamesTab({ championship }) {
   const isOwner = championship.created_by === session?.user?.id
   const existingGames = championship.championship_games ?? []
   const suggestedIds = new Set(existingGames.map(g => g.catalog_game_id))
+  const players = championship.championship_players ?? []
+  const userPlayers = players.filter(p => p.user_id)
+
+  const { data: champPlays } = useChampionshipPlays(championship.id)
+  const playCountsByGame = useMemo(() => {
+    const counts = {}
+    for (const p of champPlays ?? []) {
+      counts[p.catalog_game_id] = (counts[p.catalog_game_id] ?? 0) + 1
+    }
+    return counts
+  }, [champPlays])
 
   const { data: availableGames, isLoading: gamesLoading } = useChampionshipAvailableGames(championship)
-  const [query, setQuery] = useState('')
 
-  const filteredAvailable = (query
-    ? (availableGames ?? []).filter(g => g.title.toLowerCase().includes(query.toLowerCase()))
-    : (availableGames ?? [])
-  ).filter(g => !suggestedIds.has(g.id))
+  // Map user_id → displayName for suggesters
+  const playerMap = useMemo(() =>
+    Object.fromEntries(players.filter(p => p.user_id).map(p => [p.user_id, p.displayName])),
+    [players]
+  )
+
+  // Filters — existing championship games
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [cgOwnerFilter, setCgOwnerFilter] = useState('all')
+  const [suggestByFilter, setSuggestByFilter] = useState('all')
+  const [cgPlayersFilter, setCgPlayersFilter] = useState('all')
+  const [cgDurationFilter, setCgDurationFilter] = useState('all')
+
+  // Filters — available games to suggest
+  const [query, setQuery] = useState('')
+  const [ownerFilter, setOwnerFilter] = useState(null)
+  const [playersFilter, setPlayersFilter] = useState('all')
+  const [durationFilter, setDurationFilter] = useState('all')
+  const [showAll, setShowAll] = useState(false)
+
+  // Detect available metadata for conditional filter display
+  const hasPlayersData = useMemo(() =>
+    (availableGames ?? []).some(g => g.min_players != null || g.max_players != null),
+    [availableGames]
+  )
+  const hasDurationData = useMemo(() =>
+    (availableGames ?? []).some(g => g.min_duration_min != null || g.max_duration_min != null),
+    [availableGames]
+  )
+
+  // Status counts for filter chips
+  const statusCounts = useMemo(() => ({
+    all:       existingGames.length,
+    approved:  existingGames.filter(g => g.status === 'approved').length,
+    suggested: existingGames.filter(g => g.status === 'suggested').length,
+    rejected:  existingGames.filter(g => g.status === 'rejected').length,
+  }), [existingGames])
+
+  const statusOptions = useMemo(() => [
+    { key: 'all',       label: 'Tous',        count: statusCounts.all },
+    { key: 'approved',  label: 'Approuvés',   count: statusCounts.approved },
+    { key: 'suggested', label: 'En attente',  count: statusCounts.suggested },
+    { key: 'rejected',  label: 'Refusés',     count: statusCounts.rejected },
+  ].filter(o => o.key === 'all' || o.count > 0), [statusCounts])
+
+  // Unique suggesters (only when >1 distinct person suggested)
+  const uniqueSuggesters = useMemo(() => {
+    const ids = [...new Set(existingGames.map(g => g.suggested_by).filter(Boolean))]
+    return ids.length > 1 ? ids : []
+  }, [existingGames])
+
+  const suggestByOptions = useMemo(() => [
+    { key: 'all', label: 'Tous' },
+    ...uniqueSuggesters.map(uid => ({ key: uid, label: playerMap[uid] ?? '?' })),
+  ], [uniqueSuggesters, playerMap])
+
+  // catalog_game_id → ownerIds[], built from availableGames (which already has ownerIds)
+  const cgOwnerMap = useMemo(() =>
+    Object.fromEntries((availableGames ?? []).map(g => [g.id, g.ownerIds ?? []])),
+    [availableGames]
+  )
+
+  // Owner filter options for championship games (real user players only)
+  const cgOwnerOptions = useMemo(() => [
+    { key: 'all', label: 'Tous' },
+    ...userPlayers.map(p => ({ key: p.user_id, label: p.displayName, avatarUrl: p.avatarUrl })),
+  ], [userPlayers])
+
+  const cgHasPlayersData = useMemo(() =>
+    existingGames.some(g => g.game?.min_players != null || g.game?.max_players != null),
+    [existingGames]
+  )
+  const cgHasDurationData = useMemo(() =>
+    existingGames.some(g => g.game?.min_duration_min != null || g.game?.max_duration_min != null),
+    [existingGames]
+  )
+
+  // Filtered existing games
+  const filteredExisting = useMemo(() => {
+    return existingGames
+      .filter(g => statusFilter === 'all' || g.status === statusFilter)
+      .filter(g => cgOwnerFilter === 'all' || (cgOwnerMap[g.catalog_game_id] ?? []).includes(cgOwnerFilter))
+      .filter(g => suggestByFilter === 'all' || g.suggested_by === suggestByFilter)
+      .filter(g => {
+        if (cgPlayersFilter === 'all') return true
+        const min = g.game?.min_players ?? 1
+        const max = g.game?.max_players ?? 99
+        if (cgPlayersFilter === '5+') return max >= 5
+        const n = parseInt(cgPlayersFilter)
+        return min <= n && max >= n
+      })
+      .filter(g => {
+        if (cgDurationFilter === 'all') return true
+        const t = g.game?.min_duration_min ?? g.game?.max_duration_min
+        if (t == null) return true
+        const f = DURATION_FILTERS.find(d => d.key === cgDurationFilter)
+        if (!f) return true
+        return (f.min == null || t >= f.min) && (f.max == null || t < f.max)
+      })
+  }, [existingGames, statusFilter, cgOwnerFilter, cgOwnerMap, suggestByFilter, cgPlayersFilter, cgDurationFilter])
+
+  // Filtered available games
+  const filteredAvailable = useMemo(() => {
+    return (availableGames ?? [])
+      .filter(g => !suggestedIds.has(g.id))
+      .filter(g => !query || g.title.toLowerCase().includes(query.toLowerCase()))
+      .filter(g => !ownerFilter || (g.ownerIds ?? []).includes(ownerFilter))
+      .filter(g => {
+        if (playersFilter === 'all') return true
+        if (playersFilter === '5+') return (g.max_players ?? 99) >= 5
+        const n = parseInt(playersFilter)
+        return (g.min_players ?? 1) <= n && (g.max_players ?? 99) >= n
+      })
+      .filter(g => {
+        if (durationFilter === 'all') return true
+        const t = g.min_duration_min ?? g.max_duration_min
+        if (t == null) return true
+        const f = DURATION_FILTERS.find(d => d.key === durationFilter)
+        if (!f) return true
+        return (f.min == null || t >= f.min) && (f.max == null || t < f.max)
+      })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableGames, query, ownerFilter, playersFilter, durationFilter, suggestedIds.size])
+
+  const displayedAvailable = showAll ? filteredAvailable : filteredAvailable.slice(0, GAME_LIMIT)
+
+  // L'organisateur est toujours dans championship_players — on l'exclut du seuil
+  const hasParticipants = players.some(p =>
+    p.provisioned_player_id || (p.user_id && p.user_id !== session?.user?.id)
+  )
 
   async function handleSuggest(game) {
     try {
@@ -109,25 +301,247 @@ function GamesTab({ championship }) {
     }
   }
 
-  const hasParticipants = (championship.championship_players ?? []).some(p => p.user_id)
+  // Reset showAll when filters change
+  const handleQuery = (v) => { setQuery(v); setShowAll(false) }
+  const handleOwner = (v) => { setOwnerFilter(v); setShowAll(false) }
+  const handlePlayers = (v) => { setPlayersFilter(v); setShowAll(false) }
+  const handleDuration = (v) => { setDurationFilter(v); setShowAll(false) }
+
+  const [openChamp, setOpenChamp] = useState(true)
+  const [openSuggest, setOpenSuggest] = useState(true)
 
   return (
-    <div className="flex flex-col gap-5">
-      {championship.status !== 'closed' && (
-        <div className="flex flex-col gap-3">
-          <p className="text-xs font-semibold text-zinc-500 uppercase tracking-widest">
-            Suggérer un jeu
-          </p>
+    <div className="flex flex-col gap-4">
 
-          {!hasParticipants && (
-            <p className="text-sm text-zinc-500 py-4 text-center">
-              Ajoutez des participants pour pouvoir suggérer des jeux.
+      {/* ── Jeux du championnat ─────────────────────────────────────────── */}
+      <section className="flex flex-col gap-0 border border-zinc-800 rounded-2xl overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setOpenChamp(v => !v)}
+          className="flex items-center justify-between w-full px-4 py-3.5 bg-zinc-900 hover:bg-zinc-800/60 transition-colors"
+        >
+          <div className="flex items-center gap-2.5">
+            <p className="text-xs font-semibold text-zinc-400 uppercase tracking-widest">
+              Jeux du championnat
             </p>
-          )}
+            {existingGames.length > 0 && (
+              <span className="text-xs text-zinc-600 tabular-nums bg-zinc-800 px-1.5 py-0.5 rounded-full">{existingGames.length}</span>
+            )}
+          </div>
+          <svg
+            className={`w-4 h-4 text-zinc-500 transition-transform duration-200 ${openChamp ? 'rotate-180' : ''}`}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+          </svg>
+        </button>
 
-          {hasParticipants && (
+        {openChamp && <div className="flex flex-col gap-3 px-4 pb-4 pt-3">
+
+        {existingGames.length > 1 && (
+          <div className="flex flex-col gap-2">
+            <FilterChips options={statusOptions} value={statusFilter} onChange={setStatusFilter} />
+            {userPlayers.length > 0 && (
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-zinc-600">Propriétaire</span>
+                <div className="flex gap-1.5 flex-wrap">
+                  {cgOwnerOptions.map(opt => (
+                    <button
+                      key={opt.key}
+                      type="button"
+                      onClick={() => setCgOwnerFilter(opt.key)}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all border ${
+                        cgOwnerFilter === opt.key
+                          ? 'bg-amber-400 text-zinc-950 border-amber-400'
+                          : 'bg-transparent text-zinc-500 border-zinc-700 hover:text-zinc-200 hover:border-zinc-500'
+                      }`}
+                    >
+                      {opt.avatarUrl && (
+                        <img src={opt.avatarUrl} alt="" className="w-3.5 h-3.5 rounded-full object-cover shrink-0" />
+                      )}
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {uniqueSuggesters.length > 0 && (
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-zinc-600">Suggéré par</span>
+                <FilterChips options={suggestByOptions} value={suggestByFilter} onChange={v => { setSuggestByFilter(v) }} />
+              </div>
+            )}
+            {cgHasPlayersData && (
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-zinc-600">Joueurs</span>
+                <FilterChips options={PLAYERS_FILTERS} value={cgPlayersFilter} onChange={setCgPlayersFilter} />
+              </div>
+            )}
+            {cgHasDurationData && (
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-zinc-600">Durée</span>
+                <FilterChips options={DURATION_FILTERS} value={cgDurationFilter} onChange={setCgDurationFilter} />
+              </div>
+            )}
+          </div>
+        )}
+
+        {filteredExisting.length > 0 ? (
+          <div className="flex flex-col gap-2">
+            {filteredExisting.map(cg => {
+              const cfg = gameStatusConfig[cg.status] ?? gameStatusConfig.suggested
+              const playCount = playCountsByGame[cg.catalog_game_id] ?? 0
+              return (
+                <div key={cg.id} className="flex items-center gap-3 bg-zinc-900 border border-zinc-800 rounded-2xl px-3 py-3 transition-colors hover:border-zinc-700">
+                  <div className="w-10 h-[52px] rounded-xl overflow-hidden shrink-0 bg-zinc-800">
+                    {cg.game?.cover_url
+                      ? <img src={cg.game.cover_url} alt="" className="w-full h-full object-cover" />
+                      : <div className="w-full h-full flex items-center justify-center text-zinc-600 text-lg">🎲</div>
+                    }
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-zinc-100 truncate">{cg.game?.title ?? '—'}</p>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${cfg.cls}`}>{cfg.label}</span>
+                      {cg.status === 'approved' && (
+                        <span className="text-xs text-zinc-500">
+                          {playCount > 0
+                            ? `${playCount} partie${playCount > 1 ? 's' : ''} jouée${playCount > 1 ? 's' : ''}`
+                            : 'Pas encore joué'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {isOwner && cg.status === 'suggested' && (
+                    <div className="flex gap-1 shrink-0">
+                      <button
+                        onClick={() => handleStatus(cg.id, championship.id, 'approved')}
+                        className="w-8 h-8 flex items-center justify-center text-emerald-400 hover:bg-emerald-400/10 rounded-xl transition-colors"
+                        title="Approuver"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                        </svg>
+                      </button>
+                      <button
+                        onClick={() => handleStatus(cg.id, championship.id, 'rejected')}
+                        className="w-8 h-8 flex items-center justify-center text-red-400 hover:bg-red-400/10 rounded-xl transition-colors"
+                        title="Refuser"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        ) : existingGames.length > 0 ? (
+          <div className="flex flex-col items-center gap-2 py-6">
+            <p className="text-sm text-zinc-600">Aucun jeu ne correspond à ces filtres.</p>
+            <button
+              type="button"
+              onClick={() => { setStatusFilter('all'); setCgOwnerFilter('all'); setSuggestByFilter('all'); setCgPlayersFilter('all'); setCgDurationFilter('all') }}
+              className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
+            >
+              Réinitialiser les filtres
+            </button>
+          </div>
+        ) : championship.status === 'closed' ? (
+          <p className="text-sm text-zinc-500 text-center py-8">Aucun jeu enregistré.</p>
+        ) : (
+          <p className="text-sm text-zinc-600 text-center py-4">
+            Aucun jeu pour l'instant — suggérez-en ci-dessous.
+          </p>
+        )}
+        </div>}
+      </section>
+
+      {/* ── Suggérer un jeu ─────────────────────────────────────────────── */}
+      {championship.status !== 'closed' && (
+        <section className="flex flex-col gap-0 border border-zinc-800 rounded-2xl overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setOpenSuggest(v => !v)}
+            className="flex items-center justify-between w-full px-4 py-3.5 bg-zinc-900 hover:bg-zinc-800/60 transition-colors"
+          >
+            <p className="text-xs font-semibold text-zinc-400 uppercase tracking-widest">
+              Suggérer un jeu
+            </p>
+            <svg
+              className={`w-4 h-4 text-zinc-500 transition-transform duration-200 ${openSuggest ? 'rotate-180' : ''}`}
+              fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+            </svg>
+          </button>
+
+          {openSuggest && <div className="flex flex-col gap-3 px-4 pb-4 pt-3">
+          {!hasParticipants ? (
+            <div className="flex items-center gap-3 bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-4">
+              <span className="text-xl">👥</span>
+              <p className="text-sm text-zinc-400">
+                Ajoutez des participants pour voir leurs collections et suggérer des jeux.
+              </p>
+            </div>
+          ) : (
             <>
-              {/* Filter input */}
+              {/* Filtre propriétaire */}
+              {userPlayers.length > 0 && (availableGames?.length ?? 0) > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs text-zinc-600">Propriétaire</span>
+                  <div className="flex gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => handleOwner(null)}
+                      className={`px-2.5 py-1 rounded-full text-xs font-medium transition-all border ${
+                        !ownerFilter
+                          ? 'bg-amber-400 text-zinc-950 border-amber-400'
+                          : 'bg-transparent text-zinc-500 border-zinc-700 hover:text-zinc-200 hover:border-zinc-500'
+                      }`}
+                    >
+                      Tous
+                    </button>
+                    {userPlayers.map(p => (
+                      <button
+                        key={p.user_id}
+                        type="button"
+                        onClick={() => handleOwner(ownerFilter === p.user_id ? null : p.user_id)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-all border ${
+                          ownerFilter === p.user_id
+                            ? 'bg-amber-400 text-zinc-950 border-amber-400'
+                            : 'bg-transparent text-zinc-500 border-zinc-700 hover:text-zinc-200 hover:border-zinc-500'
+                        }`}
+                      >
+                        {p.avatarUrl && (
+                          <img src={p.avatarUrl} alt="" className="w-3.5 h-3.5 rounded-full object-cover shrink-0" />
+                        )}
+                        {p.displayName}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Filtre nombre de joueurs */}
+              {hasPlayersData && (
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs text-zinc-600">Nombre de joueurs</span>
+                  <FilterChips options={PLAYERS_FILTERS} value={playersFilter} onChange={handlePlayers} />
+                </div>
+              )}
+
+              {/* Filtre durée */}
+              {hasDurationData && (
+                <div className="flex flex-col gap-1.5">
+                  <span className="text-xs text-zinc-600">Durée de partie</span>
+                  <FilterChips options={DURATION_FILTERS} value={durationFilter} onChange={handleDuration} />
+                </div>
+              )}
+
+              {/* Recherche */}
               <div className="relative">
                 <div className="absolute inset-y-0 left-3.5 flex items-center pointer-events-none text-zinc-500">
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -137,12 +551,12 @@ function GamesTab({ championship }) {
                 <input
                   type="text"
                   value={query}
-                  onChange={e => setQuery(e.target.value)}
-                  placeholder="Filtrer les jeux des participants…"
+                  onChange={e => handleQuery(e.target.value)}
+                  placeholder="Rechercher un jeu…"
                   className="w-full pl-10 pr-4 py-2.5 rounded-2xl border border-zinc-700 bg-zinc-900 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
                 />
                 {query && (
-                  <button type="button" onClick={() => setQuery('')}
+                  <button type="button" onClick={() => handleQuery('')}
                     className="absolute inset-y-0 right-3.5 flex items-center text-zinc-500 hover:text-zinc-300 transition-colors">
                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -151,109 +565,182 @@ function GamesTab({ championship }) {
                 )}
               </div>
 
-              {/* Available games gallery */}
-              {gamesLoading && (
-                <div className="flex gap-3 overflow-x-hidden pb-2 -mx-4 px-4">
-                  {[...Array(4)].map((_, i) => (
-                    <div key={i} className="flex flex-col items-center gap-1.5 shrink-0 w-[72px]">
-                      <div className="w-[68px] h-[88px] rounded-xl bg-zinc-800 animate-pulse" />
-                      <div className="w-12 h-2.5 rounded bg-zinc-800 animate-pulse" />
+              {/* Grille de jeux — pas de scroll horizontal */}
+              {gamesLoading ? (
+                <div className="grid grid-cols-4 sm:grid-cols-5 gap-2.5">
+                  {[...Array(8)].map((_, i) => (
+                    <div key={i} className="flex flex-col items-center gap-1.5">
+                      <div className="w-full aspect-[3/4] rounded-xl bg-zinc-800 animate-pulse" />
+                      <div className="w-3/4 h-2.5 rounded bg-zinc-800 animate-pulse" />
                     </div>
                   ))}
                 </div>
-              )}
+              ) : filteredAvailable.length > 0 ? (
+                <>
+                  <div className="grid grid-cols-4 sm:grid-cols-5 gap-2.5">
+                    {displayedAvailable.map(game => (
+                      <button
+                        key={game.id}
+                        type="button"
+                        onClick={() => handleSuggest(game)}
+                        disabled={suggestGame.isPending}
+                        className="flex flex-col items-center gap-1.5 group disabled:opacity-50"
+                      >
+                        <div className="w-full aspect-[3/4] rounded-xl overflow-hidden bg-zinc-800 border-2 border-transparent group-hover:border-amber-400/60 group-active:scale-95 transition-all">
+                          {game.cover_url
+                            ? <img src={game.cover_url} alt="" className="w-full h-full object-cover" />
+                            : <div className="w-full h-full flex items-center justify-center text-2xl">🎲</div>
+                          }
+                        </div>
+                        {(game.min_players || game.max_players || game.min_duration_min) && (
+                          <div className="flex gap-1 flex-wrap justify-center">
+                            {(game.min_players || game.max_players) && (
+                              <span className="text-[9px] text-zinc-600 bg-zinc-800 rounded px-1 py-0.5 leading-none">
+                                {game.min_players === game.max_players
+                                  ? `${game.min_players}J`
+                                  : `${game.min_players ?? '?'}–${game.max_players ?? '?'}J`}
+                              </span>
+                            )}
+                            {game.min_duration_min && (
+                              <span className="text-[9px] text-zinc-600 bg-zinc-800 rounded px-1 py-0.5 leading-none">
+                                {game.min_duration_min < 60
+                                  ? `${game.min_duration_min}min`
+                                  : `${Math.round(game.min_duration_min / 60)}h`}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        <p className="text-[10px] font-medium text-center leading-tight line-clamp-2 w-full text-zinc-400 group-hover:text-zinc-200 transition-colors">
+                          {game.title}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
 
-              {!gamesLoading && filteredAvailable.length > 0 && (
-                <div className="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4 scrollbar-none">
-                  {filteredAvailable.map(game => (
+                  {filteredAvailable.length > GAME_LIMIT && (
                     <button
-                      key={game.id}
                       type="button"
-                      onClick={() => handleSuggest(game)}
-                      disabled={suggestGame.isPending}
-                      className="flex flex-col items-center gap-1.5 shrink-0 w-[72px] opacity-80 hover:opacity-100 hover:scale-[1.03] transition-all"
+                      onClick={() => setShowAll(s => !s)}
+                      className="text-sm text-amber-400 hover:text-amber-300 transition-colors py-1 text-center"
                     >
-                      <div className="w-[68px] h-[88px] rounded-xl overflow-hidden border-2 border-transparent hover:border-amber-400/60 bg-zinc-800">
-                        {game.cover_url
-                          ? <img src={game.cover_url} alt="" className="w-full h-full object-cover" />
-                          : <div className="w-full h-full flex items-center justify-center text-2xl">🎲</div>
-                        }
-                      </div>
-                      <p className="text-[11px] font-medium text-center leading-tight line-clamp-2 w-full px-0.5 text-zinc-400">
-                        {game.title}
-                      </p>
+                      {showAll
+                        ? 'Voir moins'
+                        : `Voir les ${filteredAvailable.length - GAME_LIMIT} autres jeux`}
                     </button>
-                  ))}
+                  )}
+                </>
+              ) : (availableGames ?? []).length > 0 ? (
+                <div className="flex flex-col items-center gap-2 py-6">
+                  <p className="text-sm text-zinc-500">Aucun jeu ne correspond à ces filtres.</p>
+                  <button
+                    type="button"
+                    onClick={() => { setOwnerFilter(null); setPlayersFilter('all'); setDurationFilter('all'); setQuery('') }}
+                    className="text-xs text-amber-400 hover:text-amber-300 transition-colors"
+                  >
+                    Réinitialiser les filtres
+                  </button>
                 </div>
-              )}
-
-              {!gamesLoading && filteredAvailable.length === 0 && (availableGames ?? []).length > 0 && query && (
-                <p className="text-sm text-zinc-500 text-center py-4">
-                  Aucun jeu pour « {query} »
-                </p>
-              )}
-
-              {!gamesLoading && (availableGames ?? []).length === 0 && (
-                <p className="text-sm text-zinc-500 text-center py-4">
+              ) : (
+                <p className="text-sm text-zinc-500 text-center py-6">
                   Aucun jeu dans les collections des participants.
                 </p>
               )}
             </>
           )}
-        </div>
+          </div>}
+        </section>
       )}
+    </div>
+  )
+}
 
-      {/* Already suggested / approved / rejected */}
-      {existingGames.length > 0 && (
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold text-zinc-500 uppercase tracking-widest">
-            Jeux du championnat ({existingGames.length})
-          </p>
-          {existingGames.map(cg => {
-            const cfg = gameStatusConfig[cg.status] ?? gameStatusConfig.suggested
-            return (
-              <div key={cg.id} className="flex items-center gap-3 bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2.5">
-                <div className="w-9 h-9 rounded-lg overflow-hidden shrink-0 bg-zinc-800">
-                  {cg.game?.cover_url
-                    ? <img src={cg.game.cover_url} alt="" className="w-full h-full object-cover" />
-                    : <div className="w-full h-full flex items-center justify-center text-zinc-600 text-xs">🎲</div>
-                  }
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-zinc-100 truncate">{cg.game?.title ?? '—'}</p>
-                </div>
-                <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${cfg.cls}`}>{cfg.label}</span>
-                {isOwner && cg.status === 'suggested' && (
-                  <div className="flex gap-1 shrink-0">
-                    <button
-                      onClick={() => handleStatus(cg.id, championship.id, 'approved')}
-                      className="w-7 h-7 flex items-center justify-center text-emerald-400 hover:bg-emerald-400/10 rounded-lg transition-colors"
-                      title="Approuver"
-                    >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                      </svg>
-                    </button>
-                    <button
-                      onClick={() => handleStatus(cg.id, championship.id, 'rejected')}
-                      className="w-7 h-7 flex items-center justify-center text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
-                      title="Refuser"
-                    >
-                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
+// ─── Plays tab ────────────────────────────────────────────────────────────────
+
+function formatDurationMin(min) {
+  if (!min) return null
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  if (h === 0) return `${m} min`
+  return m > 0 ? `${h}h${String(m).padStart(2, '0')}` : `${h}h`
+}
+
+function PlaysTab({ championship }) {
+  const { data: plays, isLoading } = useChampionshipPlays(championship.id)
+
+  if (isLoading) return <div className="flex justify-center py-10"><Spinner className="w-7 h-7" /></div>
+
+  if (!plays?.length) {
+    return (
+      <div className="flex flex-col items-center py-12 text-zinc-500 gap-2">
+        <svg className="w-10 h-10 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <p className="text-sm">Aucune partie enregistrée.</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {plays.map(play => {
+        const participants = play.play_participants ?? []
+        const teams = play.play_teams ?? []
+        const hasTeams = teams.length > 0
+        const entities = hasTeams
+          ? teams
+          : participants.filter(p => !p.play_team_id)
+
+        return (
+          <div key={play.id} className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-zinc-800/60">
+              <div className="w-8 h-8 rounded-lg overflow-hidden shrink-0 bg-zinc-800">
+                {play.game?.cover_url
+                  ? <img src={play.game.cover_url} alt="" className="w-full h-full object-cover" />
+                  : <div className="w-full h-full flex items-center justify-center text-zinc-600 text-xs">🎲</div>
+                }
               </div>
-            )
-          })}
-        </div>
-      )}
-
-      {existingGames.length === 0 && championship.status === 'closed' && (
-        <p className="text-sm text-zinc-500 text-center py-8">Aucun jeu enregistré.</p>
-      )}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-zinc-100 truncate">{play.game?.title ?? '—'}</p>
+                <p className="text-xs text-zinc-500">
+                  {new Date(play.started_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  {play.duration_min && ` · ${formatDurationMin(play.duration_min)}`}
+                </p>
+              </div>
+            </div>
+            <div className="px-4 py-3 flex flex-col gap-1.5">
+              {entities.map(e => {
+                const label = hasTeams
+                  ? (e.name || `Équipe (${participants.filter(p => p.play_team_id === e.id).map(p => p.displayName).join(', ')})`)
+                  : (e.displayName ?? '?')
+                return (
+                  <div key={e.id} className="flex items-center justify-between text-sm">
+                    <span className={e.is_winner ? 'text-amber-400 font-medium' : 'text-zinc-400'}>
+                      {e.is_winner && '🏆 '}{label}
+                    </span>
+                    <div className="flex items-center gap-3">
+                      {e.score !== null && e.score !== undefined && (
+                        <span className="tabular-nums text-zinc-400">{e.score}</span>
+                      )}
+                      {/* championship_points from first participant in team or from individual */}
+                      {(() => {
+                        const pts = hasTeams
+                          ? participants.find(p => p.play_team_id === e.id)?.championship_points
+                          : e.championship_points
+                        return pts !== null && pts !== undefined
+                          ? <span className="text-xs text-amber-400 font-semibold tabular-nums">{pts} pts</span>
+                          : null
+                      })()}
+                    </div>
+                  </div>
+                )
+              })}
+              {play.comment && (
+                <p className="text-xs text-zinc-500 italic mt-1">« {play.comment} »</p>
+              )}
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -263,11 +750,27 @@ function GamesTab({ championship }) {
 function ScoringDisplay({ scoring }) {
   if (!scoring) return null
   const mode = scoring.mode ?? 'by_result'
+  const winCondition = scoring.win_condition ?? 'highest'
   return (
     <div className="flex flex-col gap-3">
       <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wide">
         Grille de points ({mode === 'by_result' ? 'par résultat' : 'par classement'})
       </p>
+      <div className={`flex items-center gap-2 rounded-xl border px-3 py-2.5 ${
+        winCondition === 'lowest'
+          ? 'border-zinc-700 bg-zinc-800'
+          : 'border-zinc-800 bg-zinc-900'
+      }`}>
+        <span className="text-base">{winCondition === 'lowest' ? '⛳' : '🏆'}</span>
+        <div>
+          <p className="text-sm font-medium text-zinc-200">
+            Vainqueur : {winCondition === 'lowest' ? 'le moins de points' : 'le plus de points'}
+          </p>
+          <p className="text-xs text-zinc-500">
+            {winCondition === 'lowest' ? 'Classement croissant (ex : golf)' : 'Classement décroissant (standard)'}
+          </p>
+        </div>
+      </div>
       {mode === 'by_result' && (
         <div className="grid grid-cols-3 gap-2 text-center">
           {[['win', 'Victoire', 'text-emerald-400'], ['draw', 'Match nul', 'text-zinc-300'], ['loss', 'Défaite', 'text-red-400']].map(([k, label, cls]) => (
@@ -447,6 +950,7 @@ export default function ChampionshipDetailPage() {
   const { session } = useAuth()
   const { data: championship, isLoading } = useChampionship(id)
   const transition = useTransitionChampionship()
+  const approveAll = useApproveAllPendingGames()
   const [tab, setTab] = useState('Classement')
   const [startPlayOpen, setStartPlayOpen] = useState(false)
 
@@ -466,8 +970,17 @@ export default function ChampionshipDetailPage() {
   const isOwner = championship.created_by === session?.user?.id
   const cfg = statusConfig[championship.status] ?? statusConfig.draft
 
+  // Classement et Parties masqués tant que le championnat n'est pas lancé
+  const visibleTabs = championship.status === 'draft'
+    ? ['Jeux', 'Règles']
+    : ['Classement', 'Jeux', 'Parties', 'Règles']
+  const activeTab = visibleTabs.includes(tab) ? tab : visibleTabs[0]
+
   async function handleTransition(newStatus) {
     try {
+      if (newStatus === 'active') {
+        await approveAll.mutateAsync(championship.id)
+      }
       await transition.mutateAsync({ id: championship.id, status: newStatus })
       toast.success(
         newStatus === 'active' ? 'Championnat lancé !'
@@ -537,12 +1050,12 @@ export default function ChampionshipDetailPage() {
 
       {/* Tabs */}
       <div className="flex border-b border-zinc-800">
-        {TABS.map(t => (
+        {visibleTabs.map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
-              tab === t
+              activeTab === t
                 ? 'border-amber-400 text-amber-400'
                 : 'border-transparent text-zinc-400 hover:text-zinc-100'
             }`}
@@ -554,9 +1067,10 @@ export default function ChampionshipDetailPage() {
 
       {/* Tab content */}
       <div>
-        {tab === 'Classement' && <StandingsTab championship={championship} />}
-        {tab === 'Jeux' && <GamesTab championship={championship} />}
-        {tab === 'Règles' && <RulesTab championship={championship} />}
+        {activeTab === 'Classement' && <StandingsTab championship={championship} />}
+        {activeTab === 'Jeux' && <GamesTab championship={championship} />}
+        {activeTab === 'Parties' && <PlaysTab championship={championship} />}
+        {activeTab === 'Règles' && <RulesTab championship={championship} />}
       </div>
 
       {/* New play modal pre-linked to this championship */}
@@ -564,6 +1078,11 @@ export default function ChampionshipDetailPage() {
         open={startPlayOpen}
         onClose={() => setStartPlayOpen(false)}
         defaultChampionshipId={championship.id}
+        approvedGames={
+          (championship.championship_games ?? [])
+            .filter(cg => cg.status === 'approved' && cg.game)
+            .map(cg => cg.game)
+        }
       />
     </div>
   )

@@ -6,6 +6,7 @@ const AuthContext = createContext(null)
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(undefined) // undefined = loading
   const [profile, setProfile] = useState(null)
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false)
 
   const fetchProfile = useCallback(async (userId) => {
     const { data } = await supabase
@@ -22,8 +23,9 @@ export function AuthProvider({ children }) {
       if (session) fetchProfile(session.user.id)
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session)
+      if (event === 'PASSWORD_RECOVERY') setIsPasswordRecovery(true)
       if (session) fetchProfile(session.user.id)
       else setProfile(null)
     })
@@ -47,6 +49,18 @@ export function AuthProvider({ children }) {
 
   async function signOut() {
     await supabase.auth.signOut()
+  }
+
+  async function resetPasswordEmail(email) {
+    const redirectTo = window.location.href.split('#')[0]
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo })
+    if (error) throw error
+  }
+
+  async function updatePassword(newPassword) {
+    const { error } = await supabase.auth.updateUser({ password: newPassword })
+    if (error) throw error
+    setIsPasswordRecovery(false)
   }
 
   async function updateProfile({ username, avatarUrl }) {
@@ -73,9 +87,12 @@ export function AuthProvider({ children }) {
       session,
       profile,
       loading: session === undefined,
+      isPasswordRecovery,
       signIn,
       signUp,
       signOut,
+      resetPasswordEmail,
+      updatePassword,
       updateProfile,
     }}>
       {children}

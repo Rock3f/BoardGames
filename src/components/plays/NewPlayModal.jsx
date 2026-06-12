@@ -68,12 +68,70 @@ function GameGalleryItem({ game, selected, inCollection, onClick }) {
   )
 }
 
-function GameSection({ game, setGame }) {
+function GameSection({ game, setGame, approvedGames = null }) {
   const { data: collection, isLoading: colLoading } = useMyCollection()
   const [query, setQuery] = useState('')
   const dq = useDebounce(query, 350)
-  const { data: catalogResults, isFetching: catalogFetching } = useCatalogSearch(dq)
+  // Catalog search only in free mode (no championship context)
+  const { data: catalogResults, isFetching: catalogFetching } = useCatalogSearch(approvedGames !== null ? null : dq)
 
+  function toggle(g) {
+    setGame(prev => prev?.id === g.id ? null : g)
+  }
+
+  // ── Championship mode: only approved games ──────────────────────────────────
+  if (approvedGames !== null) {
+    const q = query.toLowerCase()
+    const filtered = q ? approvedGames.filter(g => g.title.toLowerCase().includes(q)) : approvedGames
+
+    return (
+      <div className="flex flex-col gap-3">
+        {approvedGames.length > 4 && (
+          <div className="relative">
+            <div className="absolute inset-y-0 left-3.5 flex items-center pointer-events-none text-zinc-500">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+              </svg>
+            </div>
+            <input
+              type="text"
+              placeholder="Rechercher parmi les jeux approuvés…"
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              autoFocus
+              className="w-full pl-10 pr-4 py-2.5 rounded-2xl border border-zinc-700 bg-zinc-900 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-all"
+            />
+            {query && (
+              <button type="button" onClick={() => setQuery('')}
+                className="absolute inset-y-0 right-3.5 flex items-center text-zinc-500 hover:text-zinc-300 transition-colors">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+        )}
+
+        {filtered.length > 0 ? (
+          <div className="flex gap-3 overflow-x-auto pb-2 -mx-5 px-5 scrollbar-none">
+            {filtered.map(g => (
+              <GameGalleryItem key={g.id} game={g} selected={game?.id === g.id} inCollection onClick={() => toggle(g)} />
+            ))}
+          </div>
+        ) : approvedGames.length === 0 ? (
+          <p className="text-xs text-zinc-500 text-center py-2">
+            Aucun jeu approuvé dans ce championnat.
+          </p>
+        ) : (
+          <p className="text-xs text-zinc-500 text-center py-2">
+            Aucun jeu trouvé pour « {query} »
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  // ── Free mode: full collection + catalog search ─────────────────────────────
   const q = query.toLowerCase()
   const collectionGames = (collection ?? [])
     .filter(e => e.status !== 'wishlist' && e.game)
@@ -90,10 +148,6 @@ function GameSection({ game, setGame }) {
 
   const showGallery = colLoading || filteredCollection.length > 0 || catalogOnly.length > 0 || catalogFetching
   const isEmpty = query && !colLoading && !catalogFetching && filteredCollection.length === 0 && catalogOnly.length === 0
-
-  function toggle(g) {
-    setGame(prev => prev?.id === g.id ? null : g)
-  }
 
   return (
     <div className="flex flex-col gap-3">
@@ -569,7 +623,7 @@ function ChampionshipSection({ championshipId, setChampionshipId }) {
 
 // ── Main modal ────────────────────────────────────────────────────────────────
 
-export function NewPlayModal({ open, onClose, defaultChampionshipId = null }) {
+export function NewPlayModal({ open, onClose, defaultChampionshipId = null, approvedGames = null }) {
   const toast = useToast()
   const createPlay = useCreatePlay()
   const { notifyPlayStarted } = useActivePlayCtx()
@@ -675,7 +729,7 @@ export function NewPlayModal({ open, onClose, defaultChampionshipId = null }) {
 
           <section className="flex flex-col gap-3">
             <SectionLabel>Jeu</SectionLabel>
-            <GameSection game={game} setGame={setGame} />
+            <GameSection game={game} setGame={setGame} approvedGames={approvedGames} />
           </section>
 
           <section className="flex flex-col gap-3">

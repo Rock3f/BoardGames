@@ -1,11 +1,14 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMyChampionships } from '../../hooks/useChampionships'
 import { ChampionshipCard } from '../../components/championships/ChampionshipCard'
+import { NewChampionshipModal } from '../../components/championships/NewChampionshipModal'
 import { Spinner } from '../../components/ui/Spinner'
 
 export default function ChampionshipsPage() {
   const navigate = useNavigate()
   const { data, isLoading } = useMyChampionships()
+  const [modalOpen, setModalOpen] = useState(false)
 
   const drafts = data?.filter(c => c.status === 'draft') ?? []
   const active = data?.filter(c => c.status === 'active') ?? []
@@ -26,7 +29,7 @@ export default function ChampionshipsPage() {
             <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 18.75h-9m9 0a3 3 0 013 3h-15a3 3 0 013-3m9 0v-4.5M7.5 18.75v-4.5M3 5.25h18M5.25 5.25v7.5a6.75 6.75 0 0013.5 0v-7.5" />
           </svg>
           <p className="text-sm">Aucun championnat</p>
-          <button onClick={() => navigate('/championships/new')} className="text-sm text-amber-400 hover:underline">
+          <button onClick={() => setModalOpen(true)} className="text-sm text-amber-400 hover:underline">
             Créer le premier championnat
           </button>
         </div>
@@ -55,7 +58,7 @@ export default function ChampionshipsPage() {
 
       {/* FAB */}
       <button
-        onClick={() => navigate('/championships/new')}
+        onClick={() => setModalOpen(true)}
         aria-label="Nouveau championnat"
         className="fixed bottom-20 sm:bottom-6 right-4 sm:right-6 w-14 h-14 rounded-full bg-amber-400 text-zinc-950 shadow-lg hover:bg-amber-300 transition-colors flex items-center justify-center z-30"
       >
@@ -63,6 +66,12 @@ export default function ChampionshipsPage() {
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
         </svg>
       </button>
+
+      <NewChampionshipModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onCreated={(champ) => navigate(`/championships/${champ.id}`)}
+      />
     </div>
   )
 }

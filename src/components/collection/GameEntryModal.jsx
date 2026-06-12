@@ -56,6 +56,7 @@ export function GameEntryModal({ entry, onClose }) {
   const [rating, setRating] = useState(entry?.personal_rating ?? null)
   const [note, setNote] = useState(entry?.notes ?? '')
   const [confirming, setConfirming] = useState(false)
+  const [removeError, setRemoveError] = useState(null)
 
   if (!entry) return null
   const { game } = entry
@@ -71,12 +72,13 @@ export function GameEntryModal({ entry, onClose }) {
   }
 
   async function handleRemove() {
+    setRemoveError(null)
     try {
-      await remove.mutateAsync(entry.id)
+      await remove.mutateAsync({ id: entry.id, catalogGameId: entry.catalog_game_id })
       toast.info(`${game.title} retiré de ta collection`)
       onClose()
     } catch (err) {
-      toast.error(err.message)
+      setRemoveError(err.message)
     }
   }
 
@@ -87,11 +89,18 @@ export function GameEntryModal({ entry, onClose }) {
           <p className="text-zinc-300 text-sm">
             Retirer <span className="font-semibold text-zinc-100">{game.title}</span> de ta collection ?
           </p>
+          {removeError && (
+            <p className="text-sm text-amber-400 bg-amber-400/10 border border-amber-400/30 rounded-xl px-3 py-2">
+              {removeError}
+            </p>
+          )}
           <div className="flex gap-2">
-            <Button variant="ghost" onClick={() => setConfirming(false)} className="flex-1">Annuler</Button>
-            <Button variant="danger" onClick={handleRemove} disabled={remove.isPending} className="flex-1">
-              {remove.isPending ? 'Suppression…' : 'Retirer'}
-            </Button>
+            <Button variant="ghost" onClick={() => { setConfirming(false); setRemoveError(null) }} className="flex-1">Annuler</Button>
+            {!removeError && (
+              <Button variant="danger" onClick={handleRemove} disabled={remove.isPending} className="flex-1">
+                {remove.isPending ? 'Suppression…' : 'Retirer'}
+              </Button>
+            )}
           </div>
         </div>
       ) : (
