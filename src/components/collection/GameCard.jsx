@@ -26,6 +26,31 @@ function MetaChip({ children }) {
   return <span className="text-xs text-zinc-500">{children}</span>
 }
 
+function DurationChip({ text, minDur, maxDur }) {
+  const ref = minDur ?? maxDur
+  if (!ref) return <MetaChip>{text}</MetaChip>
+
+  if (ref <= 30) {
+    return (
+      <span className="text-xs font-medium px-1.5 py-0.5 rounded-md text-emerald-400 bg-emerald-400/10">
+        {text}
+      </span>
+    )
+  }
+  if (ref <= 90) {
+    return (
+      <span className="text-xs font-medium px-1.5 py-0.5 rounded-md text-amber-400 bg-amber-400/10">
+        {text}
+      </span>
+    )
+  }
+  return (
+    <span className="text-xs font-medium px-1.5 py-0.5 rounded-md text-red-400 bg-red-400/10">
+      {text}
+    </span>
+  )
+}
+
 export function GameCard({ entry, onClick, playCount }) {
   const { game, status, rating } = entry
 
@@ -76,7 +101,13 @@ export function GameCard({ entry, onClick, playCount }) {
         {(players || duration || playCount > 0) && (
           <div className="flex gap-2 flex-wrap">
             {players && <MetaChip>{players}</MetaChip>}
-            {duration && <MetaChip>{duration}</MetaChip>}
+            {duration && (
+              <DurationChip
+                text={duration}
+                minDur={game.min_duration_min}
+                maxDur={game.max_duration_min}
+              />
+            )}
             {playCount > 0 && <MetaChip>📊 {playCount}</MetaChip>}
           </div>
         )}

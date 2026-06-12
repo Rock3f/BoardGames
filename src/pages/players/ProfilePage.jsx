@@ -7,6 +7,8 @@ import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
 import { Spinner } from '../../components/ui/Spinner'
 import { useToast } from '../../components/ui/Toast'
+import { useMyStats, useTopGames, useMonthlyPlays, useWinRateByGame, useTopOpponents } from '../../hooks/useStats'
+import { StatsContent } from '../stats/StatsPage'
 
 // Strip query string from a URL to get the clean storage path
 function stripQuery(url) {
@@ -18,7 +20,6 @@ async function uploadAvatar(userId, file, oldAvatarUrl) {
   const ext = file.name.split('.').pop().toLowerCase() || 'jpg'
   const path = `${userId}.${ext}`
 
-  // Remove previous avatar only if extension changed (clean up old file)
   if (oldAvatarUrl) {
     const oldPath = stripQuery(oldAvatarUrl)
     if (oldPath && oldPath !== path) {
@@ -32,7 +33,6 @@ async function uploadAvatar(userId, file, oldAvatarUrl) {
   if (error) throw error
 
   const { data } = supabase.storage.from('user-avatars').getPublicUrl(path)
-  // Return clean URL (no query string) — cache-busting is done at display time
   return data.publicUrl
 }
 
@@ -61,8 +61,13 @@ export default function ProfilePage() {
   const [avatarFile, setAvatarFile] = useState(null)
   const [saving, setSaving] = useState(false)
   const [usernameError, setUsernameError] = useState('')
-  // Bump after successful avatar upload to force browser cache refresh
   const [avatarCacheBust, setAvatarCacheBust] = useState(0)
+
+  const { data: stats, isLoading: statsLoading } = useMyStats()
+  const { data: topGames } = useTopGames()
+  const { data: monthly } = useMonthlyPlays()
+  const { data: winRates } = useWinRateByGame()
+  const { data: opponents } = useTopOpponents()
 
   const initials = (profile?.username ?? session?.user?.email ?? '?')[0].toUpperCase()
 
@@ -127,9 +132,9 @@ export default function ProfilePage() {
     <div className="p-4 sm:p-6 max-w-lg mx-auto flex flex-col gap-5">
       <h1 className="text-xl font-bold text-zinc-100">Profil</h1>
 
+      {/* ── Identité ── */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 flex flex-col gap-5">
         {!editing ? (
-          /* ── View mode ── */
           <div className="flex items-center gap-4">
             <AvatarDisplay src={profile?.avatar_url} initials={initials} cacheBust={avatarCacheBust} />
             <div className="min-w-0 flex-1">
@@ -143,9 +148,7 @@ export default function ProfilePage() {
             </Button>
           </div>
         ) : (
-          /* ── Edit mode ── */
           <div className="flex flex-col gap-5">
-            {/* Avatar picker */}
             <div className="flex items-center gap-4">
               <button
                 type="button"
@@ -185,7 +188,6 @@ export default function ProfilePage() {
               />
             </div>
 
-            {/* Username */}
             <Input
               label="Pseudo *"
               value={username}
@@ -195,7 +197,6 @@ export default function ProfilePage() {
               error={usernameError}
             />
 
-            {/* Email (read-only) */}
             <div className="flex flex-col gap-1.5">
               <label className="text-sm font-medium text-zinc-400">E-mail</label>
               <p className="text-sm text-zinc-500 px-3 py-2 bg-zinc-800/50 rounded-xl border border-zinc-800">
@@ -203,7 +204,6 @@ export default function ProfilePage() {
               </p>
             </div>
 
-            {/* Actions */}
             <div className="flex gap-2 justify-end">
               <Button variant="secondary" onClick={cancelEditing} disabled={saving}>
                 Annuler
@@ -219,7 +219,18 @@ export default function ProfilePage() {
         )}
       </div>
 
-      {/* Administration */}
+      {/* ── Statistiques ── */}
+      <div className="flex flex-col gap-4">
+        <h2 className="text-sm font-semibold text-zinc-400 uppercase tracking-widest">Statistiques</h2>
+        {statsLoading
+          ? <div className="flex justify-center py-8"><Spinner className="w-7 h-7" /></div>
+          : stats
+            ? <StatsContent stats={stats} topGames={topGames} monthly={monthly} winRates={winRates} opponents={opponents} />
+            : null
+        }
+      </div>
+
+      {/* ── Administration ── */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 flex flex-col gap-3">
         <h2 className="text-sm font-semibold text-zinc-400">Administration</h2>
         <button
@@ -242,7 +253,7 @@ export default function ProfilePage() {
         </button>
       </div>
 
-      {/* Danger zone */}
+      {/* ── Compte ── */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
         <h2 className="text-sm font-semibold text-zinc-400 mb-3">Compte</h2>
         <Button variant="danger" onClick={signOut}>
