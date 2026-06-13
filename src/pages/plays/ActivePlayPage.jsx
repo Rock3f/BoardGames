@@ -209,10 +209,12 @@ function CurrentRoundCard({ round, roundIdx, entities, getShortLabel, getAvatarU
 
 // ── Past rounds (compact, read-only) ─────────────────────────────────────────
 
-function PastRoundsSection({ rounds, entities, getShortLabel, onRemove }) {
+function PastRoundsSection({ rounds, entities, getShortLabel, onRemove, isSkullKing, isPapayoo }) {
   const [open, setOpen] = useState(false)
   const pastRounds = rounds.slice(0, rounds.length - 1)
   if (pastRounds.length === 0) return null
+
+  const label = (isSkullKing || isPapayoo) ? 'Historique des manches' : 'Historique des tours'
 
   return (
     <div className="flex flex-col gap-2">
@@ -222,7 +224,7 @@ function PastRoundsSection({ rounds, entities, getShortLabel, onRemove }) {
         className="flex items-center justify-between text-xs text-zinc-500 hover:text-zinc-300 transition-colors py-1"
       >
         <span className="font-semibold uppercase tracking-wide">
-          Historique des tours ({pastRounds.length})
+          {label} ({pastRounds.length})
         </span>
         <svg className={`w-4 h-4 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
           fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -238,7 +240,7 @@ function PastRoundsSection({ rounds, entities, getShortLabel, onRemove }) {
               <div key={idx} className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
                 <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800/60">
                   <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide">
-                    Tour {idx + 1}
+                    {(isSkullKing || isPapayoo) ? 'Manche' : 'Tour'} {idx + 1}
                   </p>
                   <button
                     type="button"
@@ -250,21 +252,306 @@ function PastRoundsSection({ rounds, entities, getShortLabel, onRemove }) {
                     </svg>
                   </button>
                 </div>
-                <div className="px-4 py-2.5 flex flex-wrap gap-x-4 gap-y-1">
-                  {entities.map(e => (
-                    <span key={e.id} className="text-sm">
-                      <span className="text-zinc-500 text-xs">{getShortLabel(e)} </span>
-                      <span className="tabular-nums font-semibold text-zinc-300">
-                        {round.scores?.[e.id] ?? '—'}
-                      </span>
-                    </span>
-                  ))}
-                </div>
+                {isPapayoo
+                  ? (
+                    <div className="px-4 py-2.5 flex flex-col gap-1.5">
+                      {entities.map(e => {
+                        const pd = round.pap_data?.[e.id] ?? {}
+                        const score = round.scores?.[e.id] ?? 0
+                        const sc = Number(score)
+                        const scoreColor = sc === 0 ? 'text-zinc-400' : sc >= 40 ? 'text-red-400' : 'text-amber-400'
+                        return (
+                          <div key={e.id} className="flex items-center gap-2 text-xs">
+                            <span className="text-zinc-500 shrink-0 min-w-[3rem]">{getShortLabel(e)}</span>
+                            <span className="text-zinc-600 flex-1">
+                              {pd.super_papayoo ? '🃏+40' : ''}
+                              {pd.papayoos ? `${pd.super_papayoo ? ' · ' : ''}pap+${pd.papayoos}` : (!pd.super_papayoo ? '0' : '')}
+                            </span>
+                            <span className={`font-bold tabular-nums shrink-0 ${scoreColor}`}>{sc}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                  : isSkullKing
+                  ? (
+                    <div className="px-4 py-2.5 flex flex-col gap-1.5">
+                      {entities.map(e => {
+                        const skd = round.sk_data?.[e.id] ?? {}
+                        const score = round.scores?.[e.id] ?? 0
+                        const sc = Number(score)
+                        const scoreColor = sc > 0 ? 'text-emerald-400' : sc < 0 ? 'text-red-400' : 'text-zinc-400'
+                        return (
+                          <div key={e.id} className="flex items-center gap-2 text-xs">
+                            <span className="text-zinc-500 shrink-0 min-w-[3rem]">{getShortLabel(e)}</span>
+                            <span className="text-zinc-600 flex-1">
+                              Mise {skd.bid ?? 0} · Plis {skd.won ?? 0}
+                              {(skd.skulls || skd.pirates || skd.mermaids)
+                                ? ` · ${[skd.skulls && `${skd.skulls}💀`, skd.pirates && `${skd.pirates}🏴`, skd.mermaids && `${skd.mermaids}🧜`].filter(Boolean).join(' ')}`
+                                : ''}
+                            </span>
+                            <span className={`font-bold tabular-nums shrink-0 ${scoreColor}`}>
+                              {sc > 0 ? '+' : ''}{sc}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                  : (
+                    <div className="px-4 py-2.5 flex flex-wrap gap-x-4 gap-y-1">
+                      {entities.map(e => (
+                        <span key={e.id} className="text-sm">
+                          <span className="text-zinc-500 text-xs">{getShortLabel(e)} </span>
+                          <span className="tabular-nums font-semibold text-zinc-300">
+                            {round.scores?.[e.id] ?? '—'}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  )
+                }
               </div>
             )
           })}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Skull King ────────────────────────────────────────────────────────────────
+
+function calcSkullKingScore(bid, won, roundNum, { skulls = 0, pirates = 0, mermaids = 0 } = {}) {
+  bid = Number(bid ?? 0); won = Number(won ?? 0)
+  if (bid === 0) return won === 0 ? 10 * roundNum : -10 * roundNum
+  if (won === bid) return 20 * bid + skulls * 30 + pirates * 20 + mermaids * 20
+  return -10 * Math.abs(bid - won)
+}
+
+const SK_BONUSES = [
+  { key: 'skulls',   icon: '💀', pts: 30 },
+  { key: 'pirates',  icon: '🏴',  pts: 20 },
+  { key: 'mermaids', icon: '🧜',  pts: 20 },
+]
+
+function SkullKingPlayerRow({ skData, roundNum, onUpdate, shortLabel, avatarUrl }) {
+  const data = { bid: 0, won: 0, skulls: 0, pirates: 0, mermaids: 0, ...skData }
+  const bid = Number(data.bid)
+  const won = Number(data.won)
+  const score = calcSkullKingScore(bid, won, roundNum, data)
+  const exact = bid > 0 && won === bid
+  const scoreColor = score > 0 ? 'text-emerald-400' : score < 0 ? 'text-red-400' : 'text-zinc-500'
+  const bonusTotal = exact ? (data.skulls * 30 + data.pirates * 20 + data.mermaids * 20) : 0
+
+  return (
+    <div className="py-3 border-b border-zinc-800/50 last:border-0 flex flex-col gap-2">
+      <div className="flex items-center gap-2.5">
+        <div className="w-8 h-8 rounded-full bg-zinc-700 shrink-0 overflow-hidden flex items-center justify-center text-xs font-semibold text-zinc-200">
+          {avatarUrl ? <img src={avatarUrl} alt="" className="w-full h-full object-cover" /> : getInitials(shortLabel)}
+        </div>
+        <span className="flex-1 text-sm font-medium text-zinc-100 truncate min-w-0">{shortLabel}</span>
+        <span className={`text-sm font-bold tabular-nums shrink-0 ${scoreColor}`}>
+          {score > 0 ? '+' : ''}{score}
+        </span>
+      </div>
+
+      {/* Bid chips */}
+      <div className="flex items-center gap-2 pl-10">
+        <span className="text-xs text-zinc-500 w-7 shrink-0">Mise</span>
+        <div className="flex gap-1 flex-wrap">
+          {Array.from({ length: roundNum + 1 }, (_, i) => (
+            <button key={i} type="button" onClick={() => onUpdate('bid', i)}
+              className={`w-7 h-7 rounded-lg text-xs font-bold transition-colors select-none touch-manipulation ${
+                bid === i ? 'bg-amber-400 text-zinc-950' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+              }`}>
+              {i}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Tricks won */}
+      <div className="flex items-center gap-2 pl-10">
+        <span className="text-xs text-zinc-500 w-7 shrink-0">Plis</span>
+        <div className="flex items-center gap-1.5">
+          <button type="button" onClick={() => onUpdate('won', Math.max(0, won - 1))}
+            className="w-7 h-7 rounded-lg bg-zinc-800 text-zinc-300 font-bold hover:bg-zinc-700 active:scale-95 transition-all flex items-center justify-center select-none touch-manipulation">−</button>
+          <span className="w-6 text-center text-sm font-bold text-zinc-100 tabular-nums">{won}</span>
+          <button type="button" onClick={() => onUpdate('won', Math.min(roundNum, won + 1))}
+            className="w-7 h-7 rounded-lg bg-zinc-800 text-zinc-300 font-bold hover:bg-zinc-700 active:scale-95 transition-all flex items-center justify-center select-none touch-manipulation">+</button>
+        </div>
+        {exact && <span className="text-xs font-medium text-emerald-400 ml-1">✓ Exact</span>}
+        {bid > 0 && !exact && won !== bid && <span className="text-xs font-medium text-red-400 ml-1">✗ {Math.abs(won - bid)} écart</span>}
+        {bid === 0 && won === 0 && <span className="text-xs font-medium text-sky-400 ml-1">0 parfait</span>}
+        {bid === 0 && won > 0 && <span className="text-xs font-medium text-red-400 ml-1">Pénalité</span>}
+      </div>
+
+      {/* Bonuses — only when bid exact */}
+      {exact && (
+        <div className="flex items-center gap-3 pl-[4.25rem]">
+          {SK_BONUSES.map(b => (
+            <div key={b.key} className="flex items-center gap-0.5">
+              <span className="text-base leading-none">{b.icon}</span>
+              <button type="button" onClick={() => onUpdate(b.key, Math.max(0, data[b.key] - 1))}
+                className="w-5 h-5 rounded bg-zinc-800 text-zinc-400 text-xs font-bold hover:bg-zinc-700 flex items-center justify-center select-none">−</button>
+              <span className="w-4 text-center text-xs font-bold text-zinc-200 tabular-nums">{data[b.key]}</span>
+              <button type="button" onClick={() => onUpdate(b.key, data[b.key] + 1)}
+                className="w-5 h-5 rounded bg-zinc-800 text-zinc-400 text-xs font-bold hover:bg-zinc-700 flex items-center justify-center select-none">+</button>
+            </div>
+          ))}
+          {bonusTotal > 0 && <span className="text-xs text-zinc-500 ml-1">+{bonusTotal} bonus</span>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SkullKingRoundCard({ round, roundIdx, entities, getShortLabel, getAvatarUrl, onUpdate, onRemove, totalRounds }) {
+  const roundNum = roundIdx + 1
+  return (
+    <div className="rounded-2xl border border-amber-400/30 bg-amber-400/5 overflow-hidden">
+      <div className="flex items-center justify-between px-4 pt-3.5 pb-2.5 border-b border-amber-400/15">
+        <div className="flex items-center gap-2.5">
+          <p className="text-sm font-bold text-amber-400">Manche {roundNum}</p>
+          <span className="text-xs bg-amber-400/20 text-amber-400 px-2 py-0.5 rounded-full font-medium">
+            {roundNum} pli{roundNum > 1 ? 's' : ''} max
+          </span>
+        </div>
+        {totalRounds > 1 && (
+          <button type="button" onClick={() => onRemove(roundIdx)}
+            className="text-zinc-700 hover:text-red-400 transition-colors p-1 rounded-lg"
+            title="Supprimer cette manche">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
+      </div>
+      <div className="px-4 pt-1 pb-3">
+        {entities.map(e => (
+          <SkullKingPlayerRow
+            key={e.id}
+            skData={round.sk_data?.[e.id]}
+            roundNum={roundNum}
+            onUpdate={(field, value) => onUpdate(roundIdx, e.id, field, value, roundNum)}
+            shortLabel={getShortLabel(e)}
+            avatarUrl={getAvatarUrl(e)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Papayoo ───────────────────────────────────────────────────────────────────
+
+const PAP_TOTAL = 250
+
+function calcPapayooScore({ super_papayoo = false, papayoos = 0 } = {}) {
+  return (super_papayoo ? 40 : 0) + Number(papayoos)
+}
+
+function PapayooPlayerRow({ papData, onUpdate, shortLabel, avatarUrl, remaining }) {
+  const data = { super_papayoo: false, papayoos: 0, ...papData }
+  const score = calcPapayooScore(data)
+  const scoreColor = score === 0 ? 'text-zinc-500' : score >= 40 ? 'text-red-400' : 'text-amber-400'
+
+  return (
+    <div className="py-3 border-b border-zinc-800/50 last:border-0 flex flex-col gap-2">
+      <div className="flex items-center gap-2.5">
+        <div className="w-8 h-8 rounded-full bg-zinc-700 shrink-0 overflow-hidden flex items-center justify-center text-xs font-semibold text-zinc-200">
+          {avatarUrl ? <img src={avatarUrl} alt="" className="w-full h-full object-cover" /> : getInitials(shortLabel)}
+        </div>
+        <span className="flex-1 text-sm font-medium text-zinc-100 truncate min-w-0">{shortLabel}</span>
+        <span className={`text-sm font-bold tabular-nums shrink-0 ${scoreColor}`}>{score}</span>
+      </div>
+
+      {/* Super Papayoo */}
+      <div className="flex items-center gap-2 pl-10">
+        <span className="text-xs text-zinc-500 w-16 shrink-0">🃏 Super</span>
+        <button type="button" onClick={() => onUpdate('super_papayoo', !data.super_papayoo)}
+          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors select-none border ${
+            data.super_papayoo
+              ? 'bg-red-500/20 text-red-400 border-red-500/40'
+              : 'bg-zinc-800 text-zinc-500 border-zinc-700 hover:border-zinc-600'
+          }`}>
+          {data.super_papayoo ? '✓ Oui (+40)' : 'Non'}
+        </button>
+      </div>
+
+      {/* Points stepper + bouton "→ 250" */}
+      <div className="flex items-center gap-2 pl-10">
+        <span className="text-xs text-zinc-500 w-16 shrink-0">🃏 Points</span>
+        <div className="flex items-center gap-1.5">
+          <button type="button" onClick={() => onUpdate('papayoos', Math.max(0, data.papayoos - 1))}
+            className="w-7 h-7 rounded-lg bg-zinc-800 text-zinc-300 font-bold hover:bg-zinc-700 active:scale-95 transition-all flex items-center justify-center select-none touch-manipulation">−</button>
+          <input
+            type="number"
+            inputMode="numeric"
+            value={data.papayoos}
+            onChange={e => onUpdate('papayoos', e.target.value === '' ? 0 : Math.max(0, Number(e.target.value)))}
+            className="w-14 h-7 rounded-lg border border-zinc-700 bg-zinc-900 text-center text-sm font-bold text-zinc-100 tabular-nums focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-colors"
+          />
+          <button type="button" onClick={() => onUpdate('papayoos', data.papayoos + 1)}
+            className="w-7 h-7 rounded-lg bg-zinc-800 text-zinc-300 font-bold hover:bg-zinc-700 active:scale-95 transition-all flex items-center justify-center select-none touch-manipulation">+</button>
+        </div>
+        {remaining !== data.papayoos && (
+          <button type="button" onClick={() => onUpdate('papayoos', remaining)}
+            className="ml-1 px-2 py-1 rounded-lg bg-zinc-800 border border-zinc-700 text-xs font-semibold text-zinc-400 hover:text-amber-400 hover:border-amber-400/50 transition-colors select-none tabular-nums">
+            → {remaining}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PapayooRoundCard({ round, roundIdx, entities, getShortLabel, getAvatarUrl, onUpdate, onRemove, totalRounds }) {
+  const currentTotal = entities.reduce((sum, e) => sum + calcPapayooScore(round.pap_data?.[e.id] ?? {}), 0)
+  const totalOk = currentTotal === PAP_TOTAL
+
+  return (
+    <div className="rounded-2xl border border-amber-400/30 bg-amber-400/5 overflow-hidden">
+      <div className="flex items-center justify-between px-4 pt-3.5 pb-2.5 border-b border-amber-400/15">
+        <div className="flex items-center gap-2.5">
+          <p className="text-sm font-bold text-amber-400">Manche {roundIdx + 1}</p>
+          <span className="text-xs bg-amber-400/20 text-amber-400 px-2 py-0.5 rounded-full font-medium">en cours</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`text-xs font-semibold tabular-nums ${totalOk ? 'text-emerald-400' : 'text-zinc-500'}`}>
+            {currentTotal} / {PAP_TOTAL}
+          </span>
+          {totalRounds > 1 && (
+            <button type="button" onClick={() => onRemove(roundIdx)}
+              className="text-zinc-700 hover:text-red-400 transition-colors p-1 rounded-lg"
+              title="Supprimer cette manche">
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+      <div className="px-4 pt-1 pb-3">
+        {entities.map(e => {
+          const othersSum = entities
+            .filter(o => o.id !== e.id)
+            .reduce((sum, o) => sum + calcPapayooScore(round.pap_data?.[o.id] ?? {}), 0)
+          const superPap = round.pap_data?.[e.id]?.super_papayoo ?? false
+          const remaining = Math.max(0, PAP_TOTAL - othersSum - (superPap ? 40 : 0))
+          return (
+            <PapayooPlayerRow
+              key={e.id}
+              papData={round.pap_data?.[e.id]}
+              onUpdate={(field, value) => onUpdate(roundIdx, e.id, field, value)}
+              shortLabel={getShortLabel(e)}
+              avatarUrl={getAvatarUrl(e)}
+              remaining={remaining}
+            />
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -283,6 +570,10 @@ export default function ActivePlayPage() {
   const [comment, setComment] = useState('')
   const [confirmEnd, setConfirmEnd] = useState(false)
   const [champPoints, setChampPoints] = useState(null)
+
+  const gameTitle = (play?.game?.title ?? '').toLowerCase()
+  const isSkullKing = gameTitle.includes('skull king')
+  const isPapayoo = gameTitle.includes('papayoo')
 
   useEffect(() => {
     if (!activePlay) navigate('/plays', { replace: true })
@@ -340,6 +631,32 @@ export default function ActivePlayPage() {
     setRounds(prev => prev.map((r, i) =>
       i === roundIdx ? { scores: { ...r.scores, [entityId]: value } } : r
     ))
+  }
+
+  function setPapData(roundIdx, entityId, field, value) {
+    setRounds(prev => prev.map((r, i) => {
+      if (i !== roundIdx) return r
+      const prevPap = r.pap_data?.[entityId] ?? { super_papayoo: false, papayoos: 0 }
+      const newPap = { ...prevPap, [field]: value }
+      const newPapData = { ...(r.pap_data ?? {}), [entityId]: newPap }
+      const newScores = {}
+      entities.forEach(e => { newScores[e.id] = calcPapayooScore(newPapData[e.id] ?? {}) })
+      return { ...r, pap_data: newPapData, scores: { ...(r.scores ?? {}), ...newScores } }
+    }))
+  }
+
+  function setSkData(roundIdx, entityId, field, value, roundNum) {
+    setRounds(prev => prev.map((r, i) => {
+      if (i !== roundIdx) return r
+      const prevSk = r.sk_data?.[entityId] ?? { bid: 0, won: 0, skulls: 0, pirates: 0, mermaids: 0 }
+      const newSk = { ...prevSk, [field]: Number(value) }
+      const newScore = calcSkullKingScore(newSk.bid, newSk.won, roundNum, newSk)
+      return {
+        ...r,
+        sk_data: { ...(r.sk_data ?? {}), [entityId]: newSk },
+        scores: { ...(r.scores ?? {}), [entityId]: newScore },
+      }
+    }))
   }
 
   function addRound() {
@@ -448,7 +765,7 @@ export default function ActivePlayPage() {
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-zinc-100 truncate text-sm">{play.game?.title ?? '—'}</p>
           <p className="text-xs text-zinc-500">
-            Tour {rounds.length} · {entities.length} joueur{entities.length !== 1 ? 's' : ''}
+            {(isSkullKing || isPapayoo) ? `Manche ${rounds.length}` : `Tour ${rounds.length}`} · {entities.length} joueur{entities.length !== 1 ? 's' : ''}
           </p>
         </div>
 
@@ -464,28 +781,59 @@ export default function ActivePlayPage() {
         <Standings standings={standings} play={play} getLabel={getLabel} />
 
         {/* Current round */}
-        <CurrentRoundCard
-          round={currentRound}
-          roundIdx={currentRoundIdx}
-          entities={entities}
-          getShortLabel={getShortLabel}
-          getAvatarUrl={getAvatarUrl}
-          onChange={setScore}
-          onRemove={removeRound}
-          totalRounds={rounds.length}
-        />
+        {isSkullKing
+          ? (
+            <SkullKingRoundCard
+              round={currentRound}
+              roundIdx={currentRoundIdx}
+              entities={entities}
+              getShortLabel={getShortLabel}
+              getAvatarUrl={getAvatarUrl}
+              onUpdate={setSkData}
+              onRemove={removeRound}
+              totalRounds={rounds.length}
+            />
+          )
+          : isPapayoo
+            ? (
+              <PapayooRoundCard
+                round={currentRound}
+                roundIdx={currentRoundIdx}
+                entities={entities}
+                getShortLabel={getShortLabel}
+                getAvatarUrl={getAvatarUrl}
+                onUpdate={setPapData}
+                onRemove={removeRound}
+                totalRounds={rounds.length}
+              />
+            )
+            : (
+              <CurrentRoundCard
+                round={currentRound}
+                roundIdx={currentRoundIdx}
+                entities={entities}
+                getShortLabel={getShortLabel}
+                getAvatarUrl={getAvatarUrl}
+                onChange={setScore}
+                onRemove={removeRound}
+                totalRounds={rounds.length}
+              />
+            )
+        }
 
         {/* Add round */}
-        <button
-          type="button"
-          onClick={addRound}
-          className="flex items-center justify-center gap-2 py-3 rounded-2xl border border-dashed border-zinc-700 text-sm text-zinc-500 hover:text-zinc-300 hover:border-zinc-500 transition-colors"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-          </svg>
-          Nouveau tour
-        </button>
+        {(!isSkullKing || rounds.length < 10) && (
+          <button
+            type="button"
+            onClick={addRound}
+            className="flex items-center justify-center gap-2 py-3 rounded-2xl border border-dashed border-zinc-700 text-sm text-zinc-500 hover:text-zinc-300 hover:border-zinc-500 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+            </svg>
+            {(isSkullKing || isPapayoo) ? 'Manche suivante' : 'Nouveau tour'}
+          </button>
+        )}
 
         {/* Past rounds */}
         <PastRoundsSection
@@ -493,6 +841,8 @@ export default function ActivePlayPage() {
           entities={entities}
           getShortLabel={getShortLabel}
           onRemove={removeRound}
+          isSkullKing={isSkullKing}
+          isPapayoo={isPapayoo}
         />
 
         {/* Comment */}

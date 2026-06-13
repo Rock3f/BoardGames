@@ -639,6 +639,12 @@ export function NewPlayModal({ open, onClose, defaultChampionshipId = null, appr
   }, [open, defaultChampionshipId])
 
   useEffect(() => {
+    const t = (game?.title ?? '').toLowerCase()
+    if (t.includes('skull king')) setWinRule('highest_score')
+    else if (t.includes('papayoo')) setWinRule('lowest_score')
+  }, [game?.id])
+
+  useEffect(() => {
     if (!open) return
     const handler = (e) => { if (e.key === 'Escape') handleClose() }
     window.addEventListener('keydown', handler)
@@ -734,7 +740,32 @@ export function NewPlayModal({ open, onClose, defaultChampionshipId = null, appr
 
           <section className="flex flex-col gap-3">
             <SectionLabel>Règle de victoire</SectionLabel>
-            <WinRuleSection winRule={winRule} setWinRule={setWinRule} />
+            {(() => {
+              const t = (game?.title ?? '').toLowerCase()
+              if (t.includes('skull king')) return (
+                <div className="flex items-center gap-3 px-4 py-3 rounded-2xl border border-amber-400/30 bg-amber-400/5">
+                  <svg className="w-5 h-5 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941" />
+                  </svg>
+                  <div>
+                    <p className="text-sm font-bold text-amber-400">Plus grand score gagne</p>
+                    <p className="text-xs text-zinc-500">Fixé par les règles de Skull King</p>
+                  </div>
+                </div>
+              )
+              if (t.includes('papayoo')) return (
+                <div className="flex items-center gap-3 px-4 py-3 rounded-2xl border border-amber-400/30 bg-amber-400/5">
+                  <svg className="w-5 h-5 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 6L9 12.75l4.306-4.307a11.95 11.95 0 015.814 5.519l2.74 1.22m0 0l-5.94 2.28m5.94-2.28l-2.28-5.941" />
+                  </svg>
+                  <div>
+                    <p className="text-sm font-bold text-amber-400">Plus petit score gagne</p>
+                    <p className="text-xs text-zinc-500">Fixé par les règles du Papayoo</p>
+                  </div>
+                </div>
+              )
+              return <WinRuleSection winRule={winRule} setWinRule={setWinRule} />
+            })()}
           </section>
 
           <PlayersSection
