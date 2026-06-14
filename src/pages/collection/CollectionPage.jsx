@@ -108,7 +108,7 @@ export default function CollectionPage() {
       </div>
 
       {/* Advanced filters */}
-      <div className="flex gap-2 items-center flex-wrap">
+      <div className="flex gap-2 items-center overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-none">
         <select
           value={minPlayers ?? ''}
           onChange={(e) => setMinPlayers(e.target.value ? Number(e.target.value) : null)}

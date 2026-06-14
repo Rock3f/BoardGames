@@ -263,6 +263,8 @@ const EMPTY_FIELDS = {
   minPlayers: '', maxPlayers: '', minDuration: '', maxDuration: '', description: '',
 }
 
+const isTouchDevice = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+
 function CreateTab({ onClose }) {
   const toast = useToast()
   const createGame = useCreateGame()
@@ -426,8 +428,13 @@ function CreateTab({ onClose }) {
   function openScanner() {
     setEnrichError(null)
     setDuplicateWarning(null)
-    setShowFallback(false)
     setFallbackTitle('')
+    if (!isTouchDevice) {
+      // Desktop : pas de caméra de scan, passer directement à la saisie BGG
+      setShowFallback(true)
+      return
+    }
+    setShowFallback(false)
     setScannerOpen(true)
   }
 
@@ -448,28 +455,20 @@ function CreateTab({ onClose }) {
               <Spinner className="w-4 h-4" />
               Recherche en cours…
             </>
-          ) : (
+          ) : isTouchDevice ? (
             <>
-              {/* Barcode icon */}
-              <svg
-                className="w-4 h-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z"
-                />
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M6.75 6.75h.75v.75h-.75v-.75zM6.75 16.5h.75v.75h-.75V16.5zM16.5 6.75h.75v.75h-.75v-.75zM13.5 13.5h.75v.75h-.75v-.75zM13.5 19.5h.75v.75h-.75v-.75zM19.5 13.5h.75v.75h-.75v-.75zM19.5 19.5h.75v.75h-.75v-.75zM16.5 16.5h.75v.75h-.75v-.75z"
-                />
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 6.75h.75v.75h-.75v-.75zM6.75 16.5h.75v.75h-.75V16.5zM16.5 6.75h.75v.75h-.75v-.75zM13.5 13.5h.75v.75h-.75v-.75zM13.5 19.5h.75v.75h-.75v-.75zM19.5 13.5h.75v.75h-.75v-.75zM19.5 19.5h.75v.75h-.75v-.75zM16.5 16.5h.75v.75h-.75v-.75z" />
               </svg>
               Scanner un code-barres
+            </>
+          ) : (
+            <>
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 15.803a7.5 7.5 0 0010.607 10.607z" />
+              </svg>
+              Rechercher sur BGG
             </>
           )}
         </button>
@@ -478,7 +477,9 @@ function CreateTab({ onClose }) {
         {showFallback && (
           <div className="flex flex-col gap-2 bg-zinc-800/50 rounded-xl p-3 border border-zinc-700">
             <p className="text-xs text-zinc-400">
-              Code-barre non reconnu — saisis le titre du jeu pour rechercher sur BGG :
+              {isTouchDevice
+                ? 'Code-barre non reconnu — saisis le titre du jeu pour rechercher sur BGG :'
+                : 'Recherche sur BGG par titre :'}
             </p>
             <div className="flex gap-2">
               <input
