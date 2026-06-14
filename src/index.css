@@ -6,10 +6,15 @@
 }
 
 @layer base {
+  html {
+    overflow-x: hidden;
+  }
+
   body {
     @apply bg-zinc-950 text-zinc-100;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden;
   }
 
   /* Prevent iOS Safari auto-zoom on input focus (triggers when font-size < 16px) */

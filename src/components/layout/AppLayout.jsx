@@ -114,7 +114,10 @@ export default function AppLayout() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 sm:pl-60 sm:pb-0 min-h-screen flex flex-col">
+      <main
+        className="flex-1 sm:pl-60 sm:pb-0 min-h-screen flex flex-col"
+        style={{ paddingTop: 'env(safe-area-inset-top)' }}
+      >
         <ActivePlayBanner />
         <div className="flex-1">
           <Outlet />
