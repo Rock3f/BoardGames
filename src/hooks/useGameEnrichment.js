@@ -62,11 +62,13 @@ function parsePhilibertHtml(html) {
   // Strip les balises HTML résiduelles, normalise les espaces
   description = description.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000)
 
-  let image = jsonLd?.image ? (Array.isArray(jsonLd.image) ? jsonLd.image[0] : jsonLd.image) : null
-  if (!image) {
-    image = doc.querySelector('[itemprop="image"]')?.getAttribute('src') ||
-      doc.querySelector('.product-cover img, #product-cover img')?.getAttribute('src') || null
-  }
+  // og:image en priorité (toujours la photo de boîte sur une page produit e-commerce)
+  let image =
+    doc.querySelector('meta[property="og:image"]')?.getAttribute('content') ??
+    (jsonLd?.image ? (Array.isArray(jsonLd.image) ? jsonLd.image[0] : jsonLd.image) : null) ??
+    doc.querySelector('[itemprop="image"]')?.getAttribute('src') ??
+    doc.querySelector('.product-cover img, #product-cover img, .js-qv-product-cover')?.getAttribute('src') ??
+    null
   if (image && !image.startsWith('http')) image = `https://www.philibertnet.com${image}`
 
   // Éditeur depuis JSON-LD (brand ou manufacturer)
@@ -157,6 +159,12 @@ export async function lookupPhilibert(ean) {
       doc.querySelector('a[href*="/fr/"][href$=".html"]')
     if (!anchor) return null
 
+    // Thumbnail de la carte produit dans les résultats (photo de boîte)
+    const card = anchor.closest('.product-miniature, .product-container, article')
+    const thumbEl = card?.querySelector('img[src], img[data-src]')
+    let cardImage = thumbEl?.getAttribute('src') || thumbEl?.getAttribute('data-src') || null
+    if (cardImage && !cardImage.startsWith('http')) cardImage = `https://www.philibertnet.com${cardImage}`
+
     let productUrl = anchor.getAttribute('href')
     if (!productUrl || productUrl === '#') return null
     if (!productUrl.startsWith('http')) productUrl = `https://www.philibertnet.com${productUrl}`
@@ -166,7 +174,10 @@ export async function lookupPhilibert(ean) {
     })
     if (!productRes.ok) return null
 
-    return parsePhilibertHtml(await productRes.text())
+    const productData = parsePhilibertHtml(await productRes.text())
+    // Si la page produit n'a pas d'image, on utilise le thumbnail des résultats
+    if (productData && !productData.image && cardImage) productData.image = cardImage
+    return productData
   } catch {
     return null // non-fatal : le flux bascule sur Wikidata
   }
@@ -277,8 +288,14 @@ export async function fetchBggThing(id) {
     } catch {}
   }
 
-  // Image (P18 = fichier Wikimedia Commons)
-  const imageFile = firstValue('P18')
+  // Image (P18 = fichier Wikimedia Commons) — préfère les images de boîte
+  const p18Claims = entity.claims?.P18 ?? []
+  const BOX_RE = /box|cover|bo[îi]te|front|packshot|jaquette/i
+  const allP18 = p18Claims
+    .map((c) => c.mainsnak?.datavalue?.value)
+    .filter((v) => v && typeof v === 'string')
+  const imageFile = allP18.find((f) => BOX_RE.test(f)) ?? allP18[0] ?? null
+
   let image = null
   if (imageFile && typeof imageFile === 'string') {
     const filename = imageFile.replace(/ /g, '_')
