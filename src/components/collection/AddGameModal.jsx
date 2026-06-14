@@ -419,8 +419,25 @@ function CreateTab({ onClose }) {
     setEnrichError(null)
 
     try {
+      // Wikidata : identité du jeu (nom canonique, année)
       const thing = await fetchBggThing(game.id)
-      await applyEnrichment(thing)
+
+      // Philibert : données produit plus complètes (description FR, joueurs, durée, image boîte)
+      const philibert = await lookupPhilibert(thing.name || game.name)
+
+      // Fusion : Philibert en priorité pour les données produit, Wikidata en fallback
+      const enriched = {
+        name: thing.name || game.name,
+        yearPublished: thing.yearPublished,
+        minPlayers: philibert?.minPlayers ?? thing.minPlayers,
+        maxPlayers: philibert?.maxPlayers ?? thing.maxPlayers,
+        minPlayTime: philibert?.minPlayTime ?? thing.minPlayTime,
+        maxPlayTime: philibert?.maxPlayTime ?? thing.maxPlayTime,
+        description: philibert?.description || thing.description,
+        image: philibert?.image || thing.image,
+      }
+
+      await applyEnrichment(enriched)
     } catch (err) {
       setEnrichError('Erreur : ' + err.message)
     } finally {
