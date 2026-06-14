@@ -340,7 +340,7 @@ function CreateTab({ onClose, scrollRef }) {
   async function applyEnrichment(data) {
     setFields({
       title: data.name ?? '',
-      publisher: '',
+      publisher: data.publisher ?? '',
       yearPublished: data.yearPublished ? String(data.yearPublished) : '',
       minPlayers: data.minPlayers ? String(data.minPlayers) : '',
       maxPlayers: data.maxPlayers ? String(data.maxPlayers) : '',
@@ -430,6 +430,7 @@ function CreateTab({ onClose, scrollRef }) {
       const enriched = {
         name: thing.name || game.name,
         yearPublished: thing.yearPublished,
+        publisher: philibert?.publisher ?? thing.publisher ?? null,
         minPlayers: philibert?.minPlayers ?? thing.minPlayers,
         maxPlayers: philibert?.maxPlayers ?? thing.maxPlayers,
         minPlayTime: philibert?.minPlayTime ?? thing.minPlayTime,

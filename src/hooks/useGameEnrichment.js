@@ -69,41 +69,61 @@ function parsePhilibertHtml(html) {
   }
   if (image && !image.startsWith('http')) image = `https://www.philibertnet.com${image}`
 
+  // Éditeur depuis JSON-LD (brand ou manufacturer)
+  let publisher =
+    jsonLd.brand?.name?.trim() ??
+    jsonLd.manufacturer?.name?.trim() ??
+    null
+
   let minPlayers = null, maxPlayers = null, minPlayTime = null, maxPlayTime = null
 
-  // Recherche dans les <dl> (format PrestaShop standard)
-  for (const dt of doc.querySelectorAll('dt')) {
-    const label = dt.textContent.toLowerCase()
-    const value = dt.nextElementSibling?.textContent?.trim() ?? ''
+  function parseRange(label, value) {
     if (/joueur|player/i.test(label)) {
       const m = value.match(/(\d+)\s*[-àa]\s*(\d+)/) || value.match(/(\d+)/)
       if (m) { minPlayers = +m[1]; maxPlayers = m[2] ? +m[2] : +m[1] }
     }
-    if (/dur[ée]|time/i.test(label)) {
+    if (/dur[ée]|time|minute/i.test(label)) {
       const m = value.match(/(\d+)\s*[-àa]\s*(\d+)/) || value.match(/(\d+)/)
       if (m) { minPlayTime = +m[1]; maxPlayTime = m[2] ? +m[2] : +m[1] }
     }
-  }
-
-  // Fallback : lignes de tableau
-  if (minPlayers === null) {
-    for (const row of doc.querySelectorAll('tr')) {
-      const cells = row.querySelectorAll('td, th')
-      if (cells.length < 2) continue
-      const label = cells[0].textContent.toLowerCase()
-      const value = cells[1].textContent.trim()
-      if (/joueur|player/i.test(label)) {
-        const m = value.match(/(\d+)\s*[-àa]\s*(\d+)/) || value.match(/(\d+)/)
-        if (m) { minPlayers = +m[1]; maxPlayers = m[2] ? +m[2] : +m[1] }
-      }
-      if (/dur[ée]|time/i.test(label)) {
-        const m = value.match(/(\d+)\s*[-àa]\s*(\d+)/) || value.match(/(\d+)/)
-        if (m) { minPlayTime = +m[1]; maxPlayTime = m[2] ? +m[2] : +m[1] }
-      }
+    if (!publisher && /éditeur|publisher|marque|brand|fabricant/i.test(label)) {
+      publisher = value || null
     }
   }
 
-  // Dernier recours : regex sur le texte visible
+  // 1. additionalProperty dans le JSON-LD (source la plus fiable)
+  if (Array.isArray(jsonLd.additionalProperty)) {
+    for (const prop of jsonLd.additionalProperty) {
+      if (prop['@type'] !== 'PropertyValue') continue
+      parseRange((prop.name ?? '').toLowerCase(), String(prop.value ?? '').trim())
+    }
+  }
+
+  // 2. <dl> PrestaShop standard
+  if (minPlayers === null || minPlayTime === null) {
+    for (const dt of doc.querySelectorAll('dt')) {
+      parseRange(dt.textContent.toLowerCase(), dt.nextElementSibling?.textContent?.trim() ?? '')
+    }
+  }
+
+  // 3. Lignes de tableau
+  if (minPlayers === null || minPlayTime === null) {
+    for (const row of doc.querySelectorAll('tr')) {
+      const cells = row.querySelectorAll('td, th')
+      if (cells.length < 2) continue
+      parseRange(cells[0].textContent.toLowerCase(), cells[1].textContent.trim())
+    }
+  }
+
+  // 4. <li> dans les listes de caractéristiques
+  if (minPlayers === null || minPlayTime === null) {
+    for (const li of doc.querySelectorAll('li')) {
+      const text = li.textContent
+      parseRange(text.toLowerCase(), text)
+    }
+  }
+
+  // 5. Regex sur tout le texte visible
   if (minPlayers === null) {
     const bodyText = doc.body?.textContent ?? ''
     const pm = bodyText.match(/(\d+)\s*[-àa]\s*(\d+)\s*joueurs?/i) ||
@@ -114,7 +134,7 @@ function parsePhilibertHtml(html) {
     if (dm) { minPlayTime = +dm[1]; maxPlayTime = dm[2] ? +dm[2] : +dm[1] }
   }
 
-  return { name, description, image, minPlayers, maxPlayers, minPlayTime, maxPlayTime }
+  return { name, description, image, publisher, minPlayers, maxPlayers, minPlayTime, maxPlayTime }
 }
 
 export async function lookupPhilibert(ean) {
@@ -258,9 +278,27 @@ export async function fetchBggThing(id) {
     }
   }
 
+  // Éditeur (P123 = publisher) — stocké comme QID, on résout le label en FR/EN
+  let publisher = null
+  const publisherQid = firstValue('P123')?.id ?? null
+  if (publisherQid) {
+    try {
+      const pubUrl =
+        `${WD_API}?action=wbgetentities&ids=${publisherQid}` +
+        `&props=labels&languages=fr%7Cen&format=json&origin=*`
+      const pubRes = await fetch(pubUrl, { signal: AbortSignal.timeout(4000) })
+      if (pubRes.ok) {
+        const pubJson = await pubRes.json()
+        const pubEntity = pubJson.entities?.[publisherQid]
+        publisher = pubEntity?.labels?.fr?.value ?? pubEntity?.labels?.en?.value ?? null
+      }
+    } catch {}
+  }
+
   return {
     name,
     yearPublished,
+    publisher,
     minPlayers: numProp('P1872'),
     maxPlayers: numProp('P1873'),
     minPlayTime: duration,
