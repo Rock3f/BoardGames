@@ -10,6 +10,7 @@ import { supabase } from '../../lib/supabase'
 import {
   cleanTitle,
   lookupUpc,
+  lookupPhilibert,
   searchBgg,
   fetchBggThing,
   downloadBggCover,
@@ -336,6 +337,34 @@ function CreateTab({ onClose }) {
     }
   }
 
+  async function applyEnrichment(data) {
+    setFields({
+      title: data.name ?? '',
+      publisher: '',
+      yearPublished: data.yearPublished ? String(data.yearPublished) : '',
+      minPlayers: data.minPlayers ? String(data.minPlayers) : '',
+      maxPlayers: data.maxPlayers ? String(data.maxPlayers) : '',
+      minDuration: data.minPlayTime ? String(data.minPlayTime) : '',
+      maxDuration: data.maxPlayTime ? String(data.maxPlayTime) : '',
+      description: data.description ?? '',
+    })
+    if (data.image) {
+      try {
+        const file = await downloadBggCover(data.image)
+        setCoverFile(file)
+        setCoverPreview(URL.createObjectURL(file))
+      } catch {}
+    }
+    if (data.name) {
+      const { data: existing } = await supabase
+        .from('game_catalog')
+        .select('id, title')
+        .ilike('title', data.name)
+        .limit(1)
+      if (existing?.length > 0) setDuplicateWarning(existing[0])
+    }
+  }
+
   async function handleScan(ean) {
     setScannerOpen(false)
     setScannedEan(ean)
@@ -346,6 +375,15 @@ function CreateTab({ onClose }) {
     setDuplicateWarning(null)
 
     try {
+      // 1. Philibert en priorité : EAN → page produit directe, pas de désambiguïsation
+      const philibert = await lookupPhilibert(ean)
+      if (philibert) {
+        await applyEnrichment(philibert)
+        setEnriching(false)
+        return
+      }
+
+      // 2. Fallback : UPCitemdb → titre → Wikidata
       const rawTitle = await lookupUpc(ean)
       const cleaned = cleanTitle(rawTitle)
       if (!cleaned) {
@@ -356,7 +394,6 @@ function CreateTab({ onClose }) {
       setEnriching(false)
       await runBggSearch(cleaned)
     } catch {
-      // UPCitemdb ne connaît pas ce code-barre → saisie manuelle du titre
       setEnriching(false)
       setShowFallback(true)
     }
@@ -382,44 +419,10 @@ function CreateTab({ onClose }) {
     setEnrichError(null)
 
     try {
-      // 3. Fetch full game details from BGG
       const thing = await fetchBggThing(game.id)
-
-      setFields({
-        title: thing.name ?? '',
-        publisher: '',
-        yearPublished: thing.yearPublished ? String(thing.yearPublished) : '',
-        minPlayers: thing.minPlayers ? String(thing.minPlayers) : '',
-        maxPlayers: thing.maxPlayers ? String(thing.maxPlayers) : '',
-        minDuration: thing.minPlayTime ? String(thing.minPlayTime) : '',
-        maxDuration: thing.maxPlayTime ? String(thing.maxPlayTime) : '',
-        description: thing.description ?? '',
-      })
-
-      // 4. Download cover from BGG (via edge function proxy)
-      if (thing.image) {
-        try {
-          const file = await downloadBggCover(thing.image)
-          setCoverFile(file)
-          setCoverPreview(URL.createObjectURL(file))
-        } catch {
-          // Cover download failed — non-critical, user can add manually
-        }
-      }
-
-      // 5. Check for duplicate title in catalog
-      if (thing.name) {
-        const { data } = await supabase
-          .from('game_catalog')
-          .select('id, title')
-          .ilike('title', thing.name)
-          .limit(1)
-        if (data?.length > 0) {
-          setDuplicateWarning(data[0])
-        }
-      }
+      await applyEnrichment(thing)
     } catch (err) {
-      setEnrichError('Erreur BGG : ' + err.message)
+      setEnrichError('Erreur : ' + err.message)
     } finally {
       setEnriching(false)
     }

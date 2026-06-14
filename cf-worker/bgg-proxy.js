@@ -17,7 +17,8 @@ export default {
     const target = new URL(targetUrl)
     if (
       !target.hostname.endsWith('boardgamegeek.com') &&
-      !target.hostname.endsWith('geekdo.com')
+      !target.hostname.endsWith('geekdo.com') &&
+      !target.hostname.endsWith('philibertnet.com')
     ) {
       return new Response('Forbidden', { status: 403 })
     }

@@ -29,6 +29,128 @@ export function cleanTitle(rawTitle) {
   return title
 }
 
+// ── Philibert scraping (EAN → page produit → données structurées) ────────────
+
+function parsePhilibertHtml(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+
+  // JSON-LD Product schema (PrestaShop en inclut souvent un)
+  let jsonLd = null
+  for (const script of doc.querySelectorAll('script[type="application/ld+json"]')) {
+    try {
+      const parsed = JSON.parse(script.textContent)
+      const candidates = Array.isArray(parsed) ? parsed : [parsed]
+      const product = candidates.find((d) => d['@type'] === 'Product')
+      if (product) { jsonLd = product; break }
+    } catch {}
+  }
+
+  const name = (
+    jsonLd?.name ||
+    doc.querySelector('h1[itemprop="name"], h1.page-heading, h1')?.textContent
+  )?.trim() ?? ''
+
+  if (!name) return null // pas une page produit
+
+  let description = jsonLd?.description ?? ''
+  if (!description) {
+    description = (
+      doc.querySelector('[itemprop="description"], .product-description, .rte, #short_description_content')
+        ?.textContent ?? ''
+    ).trim()
+  }
+  description = description.replace(/\s+/g, ' ').trim().slice(0, 2000)
+
+  let image = jsonLd?.image ? (Array.isArray(jsonLd.image) ? jsonLd.image[0] : jsonLd.image) : null
+  if (!image) {
+    image = doc.querySelector('[itemprop="image"]')?.getAttribute('src') ||
+      doc.querySelector('.product-cover img, #product-cover img')?.getAttribute('src') || null
+  }
+  if (image && !image.startsWith('http')) image = `https://www.philibertnet.com${image}`
+
+  let minPlayers = null, maxPlayers = null, minPlayTime = null, maxPlayTime = null
+
+  // Recherche dans les <dl> (format PrestaShop standard)
+  for (const dt of doc.querySelectorAll('dt')) {
+    const label = dt.textContent.toLowerCase()
+    const value = dt.nextElementSibling?.textContent?.trim() ?? ''
+    if (/joueur|player/i.test(label)) {
+      const m = value.match(/(\d+)\s*[-àa]\s*(\d+)/) || value.match(/(\d+)/)
+      if (m) { minPlayers = +m[1]; maxPlayers = m[2] ? +m[2] : +m[1] }
+    }
+    if (/dur[ée]|time/i.test(label)) {
+      const m = value.match(/(\d+)\s*[-àa]\s*(\d+)/) || value.match(/(\d+)/)
+      if (m) { minPlayTime = +m[1]; maxPlayTime = m[2] ? +m[2] : +m[1] }
+    }
+  }
+
+  // Fallback : lignes de tableau
+  if (minPlayers === null) {
+    for (const row of doc.querySelectorAll('tr')) {
+      const cells = row.querySelectorAll('td, th')
+      if (cells.length < 2) continue
+      const label = cells[0].textContent.toLowerCase()
+      const value = cells[1].textContent.trim()
+      if (/joueur|player/i.test(label)) {
+        const m = value.match(/(\d+)\s*[-àa]\s*(\d+)/) || value.match(/(\d+)/)
+        if (m) { minPlayers = +m[1]; maxPlayers = m[2] ? +m[2] : +m[1] }
+      }
+      if (/dur[ée]|time/i.test(label)) {
+        const m = value.match(/(\d+)\s*[-àa]\s*(\d+)/) || value.match(/(\d+)/)
+        if (m) { minPlayTime = +m[1]; maxPlayTime = m[2] ? +m[2] : +m[1] }
+      }
+    }
+  }
+
+  // Dernier recours : regex sur le texte visible
+  if (minPlayers === null) {
+    const bodyText = doc.body?.textContent ?? ''
+    const pm = bodyText.match(/(\d+)\s*[-àa]\s*(\d+)\s*joueurs?/i) ||
+      bodyText.match(/(\d+)\s+joueurs?/i)
+    if (pm) { minPlayers = +pm[1]; maxPlayers = pm[2] ? +pm[2] : +pm[1] }
+    const dm = bodyText.match(/(\d+)\s*[-àa]\s*(\d+)\s*min/i) ||
+      bodyText.match(/(\d+)\s+min(?:utes?)?(?:\s+environ)?/i)
+    if (dm) { minPlayTime = +dm[1]; maxPlayTime = dm[2] ? +dm[2] : +dm[1] }
+  }
+
+  return { name, description, image, minPlayers, maxPlayers, minPlayTime, maxPlayTime }
+}
+
+export async function lookupPhilibert(ean) {
+  try {
+    const searchUrl = `https://www.philibertnet.com/fr/recherche?q=${encodeURIComponent(ean)}`
+    const res = await fetch(`${CF_WORKER}/?url=${encodeURIComponent(searchUrl)}`, {
+      signal: AbortSignal.timeout(12000),
+    })
+    if (!res.ok) return null
+    const html = await res.text()
+
+    // Cas 1 : la recherche redirige directement sur la page produit
+    const direct = parsePhilibertHtml(html)
+    if (direct) return direct
+
+    // Cas 2 : page de résultats → premier lien produit
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    const anchor =
+      doc.querySelector('.product-miniature a.product-thumbnail, .product-container a[href$=".html"], article a[href$=".html"]') ||
+      doc.querySelector('a[href*="/fr/"][href$=".html"]')
+    if (!anchor) return null
+
+    let productUrl = anchor.getAttribute('href')
+    if (!productUrl || productUrl === '#') return null
+    if (!productUrl.startsWith('http')) productUrl = `https://www.philibertnet.com${productUrl}`
+
+    const productRes = await fetch(`${CF_WORKER}/?url=${encodeURIComponent(productUrl)}`, {
+      signal: AbortSignal.timeout(12000),
+    })
+    if (!productRes.ok) return null
+
+    return parsePhilibertHtml(await productRes.text())
+  } catch {
+    return null // non-fatal : le flux bascule sur Wikidata
+  }
+}
+
 // ── UPC lookup via edge function ──────────────────────────────────────────────
 
 export async function lookupUpc(ean) {
