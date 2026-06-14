@@ -23,8 +23,11 @@ function jsonResponse(data, status = 200) {
 }
 
 const BGG_HEADERS = {
-  'User-Agent': 'BoardGamesApp/1.0 (contact@boardgames.app)',
-  'Accept': 'application/xml, text/xml, */*',
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+  'Referer': 'https://boardgamegeek.com/',
+  'Cache-Control': 'no-cache',
 }
 
 async function fetchBgg(url, maxAttempts = 5) {
