@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+@keyframes scan {
+  0%, 100% { transform: translateY(0); opacity: 0.9; }
+  50% { transform: translateY(10rem); opacity: 0.5; }
+}
+
 @layer base {
   body {
     @apply bg-zinc-950 text-zinc-100;
