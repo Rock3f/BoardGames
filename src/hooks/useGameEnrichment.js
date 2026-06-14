@@ -10,25 +10,12 @@ export function cleanTitle(rawTitle) {
 }
 
 export async function lookupUpc(ean) {
-  const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${ean}`)
-  if (res.status === 429) {
-    const err = new Error('Quota UPCitemdb dépassé (100 req/jour). Saisis le titre manuellement.')
-    err.code = 'quota_exceeded'
-    throw err
-  }
-  if (!res.ok) {
-    const err = new Error('Erreur lors de la recherche UPC.')
-    err.code = 'upc_error'
-    throw err
-  }
-  const data = await res.json()
-  const title = data.items?.[0]?.title
-  if (!title) {
-    const err = new Error('Code-barres non reconnu dans la base UPCitemdb.')
-    err.code = 'not_found'
-    throw err
-  }
-  return title
+  const { data, error } = await supabase.functions.invoke('bgg-proxy', {
+    body: { action: 'upc', ean },
+  })
+  if (error) throw new Error(error.message || 'Erreur lors de la recherche UPC.')
+  if (data?.error) throw new Error(data.error)
+  return data.title
 }
 
 export async function searchBgg(query) {

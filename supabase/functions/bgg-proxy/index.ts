@@ -105,6 +105,16 @@ async function handleThing(id) {
   }
 }
 
+async function handleUpc(ean) {
+  const res = await fetch(`https://api.upcitemdb.com/prod/trial/lookup?upc=${encodeURIComponent(ean)}`)
+  if (res.status === 429) throw new Error('Quota UPCitemdb dépassé (100 req/jour). Saisis le titre manuellement.')
+  if (!res.ok) throw new Error(`UPCitemdb error ${res.status}`)
+  const data = await res.json()
+  const title = data.items?.[0]?.title
+  if (!title) throw new Error('Code-barres non reconnu dans la base UPCitemdb.')
+  return { title }
+}
+
 async function handleImage(url) {
   if (!url.startsWith('https://') && !url.startsWith('http://')) {
     throw new Error('URL image invalide')
@@ -132,6 +142,12 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json()
     const { action } = body
+
+    if (action === 'upc') {
+      if (!body.ean) throw new Error('ean est requis')
+      const result = await handleUpc(String(body.ean))
+      return jsonResponse(result)
+    }
 
     if (action === 'search') {
       if (!body.query) throw new Error('query est requis')
