@@ -284,6 +284,8 @@ function CreateTab({ onClose }) {
   const [scannedEan, setScannedEan] = useState(null)
   const [searchedTitle, setSearchedTitle] = useState(null)
   const [duplicateWarning, setDuplicateWarning] = useState(null)
+  const [fallbackTitle, setFallbackTitle] = useState('')
+  const [showFallback, setShowFallback] = useState(false)
 
   function set(key) {
     return (e) => setFields((f) => ({ ...f, [key]: e.target.value }))
@@ -311,58 +313,59 @@ function CreateTab({ onClose }) {
 
   // ── Scan flow ──────────────────────────────────────────────────────────────
 
+  async function runBggSearch(title) {
+    setSearchedTitle(title)
+    setEnriching(true)
+    setEnrichError(null)
+
+    try {
+      const results = await searchBgg(title)
+      setEnriching(false)
+      if (results.length === 0) {
+        setFields((f) => ({ ...f, title }))
+        setEnrichError('Aucun résultat BGG pour ce titre. Le titre a été pré-rempli.')
+        return
+      }
+      setBggResults(results)
+      setDisambigOpen(true)
+    } catch (err) {
+      setEnriching(false)
+      setEnrichError('Erreur BGG : ' + err.message)
+    }
+  }
+
   async function handleScan(ean) {
     setScannerOpen(false)
     setScannedEan(ean)
+    setShowFallback(false)
+    setFallbackTitle('')
     setEnriching(true)
     setEnrichError(null)
     setDuplicateWarning(null)
 
     try {
-      // 1. Resolve EAN → raw title via UPCitemdb
-      let rawTitle = ''
-      try {
-        rawTitle = await lookupUpc(ean)
-      } catch (err) {
-        setEnriching(false)
-        setEnrichError(err.message)
-        return
-      }
-
+      const rawTitle = await lookupUpc(ean)
       const cleaned = cleanTitle(rawTitle)
-      setSearchedTitle(cleaned)
-
       if (!cleaned) {
         setEnriching(false)
-        setEnrichError('Titre non trouvé pour ce code-barres.')
+        setShowFallback(true)
         return
       }
-
-      // 2. Search BGG for matching games
-      let results = []
-      try {
-        results = await searchBgg(cleaned)
-      } catch (err) {
-        setEnriching(false)
-        setEnrichError('Erreur BGG : ' + err.message)
-        return
-      }
-
       setEnriching(false)
-
-      if (results.length === 0) {
-        // No BGG results — pre-fill title from UPC at minimum
-        setFields((f) => ({ ...f, title: cleaned }))
-        setEnrichError('Aucun résultat BGG pour ce titre. Le titre a été pré-rempli.')
-        return
-      }
-
-      setBggResults(results)
-      setDisambigOpen(true)
-    } catch (err) {
+      await runBggSearch(cleaned)
+    } catch {
+      // UPCitemdb ne connaît pas ce code-barre → saisie manuelle du titre
       setEnriching(false)
-      setEnrichError('Erreur lors de la recherche : ' + err.message)
+      setShowFallback(true)
     }
+  }
+
+  async function handleFallbackSearch(e) {
+    e.preventDefault()
+    const title = fallbackTitle.trim()
+    if (!title) return
+    setShowFallback(false)
+    await runBggSearch(title)
   }
 
   async function handleSelectBgg(game) {
@@ -424,6 +427,8 @@ function CreateTab({ onClose }) {
   function openScanner() {
     setEnrichError(null)
     setDuplicateWarning(null)
+    setShowFallback(false)
+    setFallbackTitle('')
     setScannerOpen(true)
   }
 
@@ -469,6 +474,27 @@ function CreateTab({ onClose }) {
             </>
           )}
         </button>
+
+        {/* Fallback: EAN not in UPCitemdb → manual BGG search */}
+        {showFallback && (
+          <form onSubmit={handleFallbackSearch} className="flex flex-col gap-2 bg-zinc-800/50 rounded-xl p-3 border border-zinc-700">
+            <p className="text-xs text-zinc-400">
+              Code-barre non reconnu — saisis le titre du jeu pour rechercher sur BGG :
+            </p>
+            <div className="flex gap-2">
+              <input
+                autoFocus
+                value={fallbackTitle}
+                onChange={(e) => setFallbackTitle(e.target.value)}
+                placeholder="Ex: Catan, Wingspan…"
+                className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-colors"
+              />
+              <Button type="submit" disabled={!fallbackTitle.trim()}>
+                Rechercher
+              </Button>
+            </div>
+          </form>
+        )}
 
         {/* Enrich feedback */}
         {enrichError && (
