@@ -87,13 +87,13 @@ function BottomNavItem({ to, label, icon, end }) {
       to={to}
       end={end}
       className={({ isActive }) =>
-        `flex flex-col items-center gap-0.5 px-2 py-1 text-xs font-medium transition-colors ${
+        `flex-1 flex flex-col items-center gap-0.5 px-1 py-1.5 font-medium transition-colors min-w-0 ${
           isActive ? 'text-amber-400' : 'text-zinc-500 hover:text-zinc-300'
         }`
       }
     >
       {icon}
-      <span>{label}</span>
+      <span className="text-[10px] leading-tight truncate w-full text-center">{label}</span>
     </NavLink>
   )
 }
@@ -114,15 +114,20 @@ export default function AppLayout() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 sm:pl-60 pb-16 sm:pb-0 min-h-screen flex flex-col">
+      <main className="flex-1 sm:pl-60 sm:pb-0 min-h-screen flex flex-col">
         <ActivePlayBanner />
         <div className="flex-1">
           <Outlet />
         </div>
+        {/* Spacer for mobile bottom nav + iOS safe area */}
+        <div className="sm:hidden shrink-0" style={{ height: 'calc(4rem + env(safe-area-inset-bottom))' }} />
       </main>
 
       {/* Mobile bottom nav */}
-      <nav className="sm:hidden fixed bottom-0 inset-x-0 bg-zinc-950 border-t border-zinc-800 flex justify-around items-center h-16 px-2 z-40">
+      <nav
+        className="sm:hidden fixed bottom-0 inset-x-0 bg-zinc-950 border-t border-zinc-800 flex items-center z-40"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom)', minHeight: '4rem' }}
+      >
         {navItems.map((item) => (
           <BottomNavItem key={item.to} {...item} />
         ))}

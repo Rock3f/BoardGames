@@ -6,4 +6,11 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+
+  /* Prevent iOS Safari auto-zoom on input focus (triggers when font-size < 16px) */
+  @media screen and (-webkit-min-device-pixel-ratio: 0) {
+    input:focus, select:focus, textarea:focus {
+      font-size: 16px;
+    }
+  }
 }
