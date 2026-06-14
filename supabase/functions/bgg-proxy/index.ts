@@ -22,11 +22,20 @@ function jsonResponse(data, status = 200) {
   })
 }
 
+const BGG_HEADERS = {
+  'User-Agent': 'BoardGamesApp/1.0 (contact@boardgames.app)',
+  'Accept': 'application/xml, text/xml, */*',
+}
+
 async function fetchBgg(url, maxAttempts = 5) {
   for (let i = 0; i < maxAttempts; i++) {
-    const res = await fetch(url)
+    const res = await fetch(url, { headers: BGG_HEADERS })
     if (res.status === 202) {
       await new Promise((r) => setTimeout(r, 2000 * (i + 1)))
+      continue
+    }
+    if (res.status === 429) {
+      await new Promise((r) => setTimeout(r, 3000 * (i + 1)))
       continue
     }
     if (!res.ok) throw new Error(`BGG API error ${res.status}`)
