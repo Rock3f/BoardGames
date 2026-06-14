@@ -34,7 +34,8 @@ export function cleanTitle(rawTitle) {
 function parsePhilibertHtml(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html')
 
-  // JSON-LD Product schema (PrestaShop en inclut souvent un)
+  // JSON-LD Product schema — condition nécessaire pour identifier une page produit.
+  // Sans ça, le h1 générique du site ("Le spécialiste du jeu de société") serait pris comme titre.
   let jsonLd = null
   for (const script of doc.querySelectorAll('script[type="application/ld+json"]')) {
     try {
@@ -45,12 +46,10 @@ function parsePhilibertHtml(html) {
     } catch {}
   }
 
-  const name = (
-    jsonLd?.name ||
-    doc.querySelector('h1[itemprop="name"], h1.page-heading, h1')?.textContent
-  )?.trim() ?? ''
+  if (!jsonLd) return null // pas une page produit (page de résultats, accueil, etc.)
 
-  if (!name) return null // pas une page produit
+  const name = jsonLd.name?.trim() ?? ''
+  if (!name) return null
 
   let description = jsonLd?.description ?? ''
   if (!description) {
