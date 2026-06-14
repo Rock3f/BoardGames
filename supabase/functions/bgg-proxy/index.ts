@@ -127,7 +127,31 @@ async function handleUpc(ean) {
   return { title }
 }
 
-async function handleImage(url) {
+async function handleProxy(url: string) {
+  const target = new URL(url)
+  const isPhilibert = target.hostname.endsWith('philibertnet.com')
+
+  const headers: Record<string, string> = {
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    Accept:
+      'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+  }
+  if (isPhilibert) {
+    headers['Referer'] = 'https://www.philibertnet.com/fr/'
+    headers['Sec-Fetch-Dest'] = 'document'
+    headers['Sec-Fetch-Mode'] = 'navigate'
+    headers['Sec-Fetch-Site'] = 'same-origin'
+  }
+
+  const res = await fetch(url, { headers })
+  if (!res.ok) throw new Error(`Proxy fetch échoué: ${res.status}`)
+  const html = await res.text()
+  return { html, finalUrl: res.url }
+}
+
+async function handleImage(url: string) {
   if (!url.startsWith('https://') && !url.startsWith('http://')) {
     throw new Error('URL image invalide')
   }
@@ -187,6 +211,12 @@ Deno.serve(async (req) => {
     if (action === 'thing') {
       if (!body.id) throw new Error('id est requis')
       const result = await handleThing(String(body.id))
+      return jsonResponse(result)
+    }
+
+    if (action === 'proxy') {
+      if (!body.url) throw new Error('url est requis')
+      const result = await handleProxy(String(body.url))
       return jsonResponse(result)
     }
 

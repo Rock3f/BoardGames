@@ -139,14 +139,28 @@ function parsePhilibertHtml(html) {
   return { name, description, image, publisher, minPlayers, maxPlayers, minPlayTime, maxPlayTime }
 }
 
-export async function lookupPhilibert(ean) {
+// Récupère le HTML d'une URL Philibert : CF Worker d'abord, puis Edge Function en fallback
+async function fetchPhilibertHtml(url) {
+  // 1. CF Worker
   try {
-    const searchUrl = `https://www.philibertnet.com/fr/recherche?q=${encodeURIComponent(ean)}`
-    const res = await fetch(`${CF_WORKER}/?url=${encodeURIComponent(searchUrl)}`, {
+    const res = await fetch(`${CF_WORKER}/?url=${encodeURIComponent(url)}`, {
       signal: AbortSignal.timeout(6000),
     })
-    if (!res.ok) return null
-    const html = await res.text()
+    if (res.ok) return await res.text()
+  } catch {}
+
+  // 2. Supabase Edge Function (Deno Deploy, réseau différent — contourne le blocage CF→CF)
+  const { data, error } = await supabase.functions.invoke('bgg-proxy', {
+    body: { action: 'proxy', url },
+  })
+  if (error || !data?.html) throw new Error('Proxy indisponible')
+  return data.html
+}
+
+export async function lookupPhilibert(query) {
+  try {
+    const searchUrl = `https://www.philibertnet.com/fr/recherche?q=${encodeURIComponent(query)}`
+    const html = await fetchPhilibertHtml(searchUrl)
 
     // Cas 1 : la recherche redirige directement sur la page produit
     const direct = parsePhilibertHtml(html)
@@ -169,17 +183,12 @@ export async function lookupPhilibert(ean) {
     if (!productUrl || productUrl === '#') return null
     if (!productUrl.startsWith('http')) productUrl = `https://www.philibertnet.com${productUrl}`
 
-    const productRes = await fetch(`${CF_WORKER}/?url=${encodeURIComponent(productUrl)}`, {
-      signal: AbortSignal.timeout(6000),
-    })
-    if (!productRes.ok) return null
-
-    const productData = parsePhilibertHtml(await productRes.text())
-    // Si la page produit n'a pas d'image, on utilise le thumbnail des résultats
+    const productHtml = await fetchPhilibertHtml(productUrl)
+    const productData = parsePhilibertHtml(productHtml)
     if (productData && !productData.image && cardImage) productData.image = cardImage
     return productData
   } catch {
-    return null // non-fatal : le flux bascule sur Wikidata
+    return null
   }
 }
 
