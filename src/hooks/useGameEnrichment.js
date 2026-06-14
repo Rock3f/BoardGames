@@ -1,13 +1,17 @@
 import { supabase } from '../lib/supabase'
 
+const BGG_API = 'https://boardgamegeek.com/xmlapi2'
+// corsproxy.io relaie la réponse BGG avec les headers CORS manquants
+const CORS_PROXY = 'https://corsproxy.io/?url='
+
 export function cleanTitle(rawTitle) {
   if (!rawTitle) return ''
-  // Take first segment before " - " or " – " (edition/publisher markers)
   let title = rawTitle.split(/\s[-–]\s/)[0].trim()
-  // Remove trailing year in parens: "Catan (2015)"
   title = title.replace(/\s*\(\d{4}\)\s*$/, '').trim()
   return title
 }
+
+// ── UPC lookup via edge function (UPCitemdb bloque CORS navigateur) ───────────
 
 export async function lookupUpc(ean) {
   const { data, error } = await supabase.functions.invoke('bgg-proxy', {
@@ -18,23 +22,83 @@ export async function lookupUpc(ean) {
   return data.title
 }
 
+// ── BGG search depuis le navigateur via proxy CORS ───────────────────────────
+
 export async function searchBgg(query) {
-  const { data, error } = await supabase.functions.invoke('bgg-proxy', {
-    body: { action: 'search', query },
-  })
-  if (error) throw new Error(error.message || 'Recherche BGG échouée')
-  if (data?.error) throw new Error(data.error)
-  return Array.isArray(data) ? data : []
+  const bggUrl = `${BGG_API}/search?query=${encodeURIComponent(query)}&type=boardgame`
+  const res = await fetch(`${CORS_PROXY}${encodeURIComponent(bggUrl)}`)
+  if (!res.ok) throw new Error(`BGG search échoué (${res.status})`)
+  const xml = await res.text()
+  return parseBggSearch(xml)
 }
 
-export async function fetchBggThing(id) {
-  const { data, error } = await supabase.functions.invoke('bgg-proxy', {
-    body: { action: 'thing', id: String(id) },
-  })
-  if (error) throw new Error(error.message || 'Récupération BGG échouée')
-  if (data?.error) throw new Error(data.error)
-  return data
+function parseBggSearch(xml) {
+  const doc = new DOMParser().parseFromString(xml, 'text/xml')
+  return Array.from(doc.querySelectorAll('item'))
+    .slice(0, 15)
+    .map((item) => {
+      const primaryName =
+        item.querySelector('name[type="primary"]')?.getAttribute('value') ??
+        item.querySelector('name')?.getAttribute('value') ??
+        ''
+      return {
+        id: item.getAttribute('id'),
+        name: primaryName,
+        yearPublished: item.querySelector('yearpublished')?.getAttribute('value') ?? null,
+      }
+    })
+    .filter((g) => g.name)
 }
+
+// ── BGG thing depuis le navigateur via proxy CORS ────────────────────────────
+
+export async function fetchBggThing(id) {
+  const bggUrl = `${BGG_API}/thing?id=${encodeURIComponent(id)}&stats=1`
+  const res = await fetch(`${CORS_PROXY}${encodeURIComponent(bggUrl)}`)
+  if (!res.ok) throw new Error(`BGG thing échoué (${res.status})`)
+  const xml = await res.text()
+  return parseBggThing(xml)
+}
+
+function parseBggThing(xml) {
+  const doc = new DOMParser().parseFromString(xml, 'text/xml')
+  const item = doc.querySelector('item')
+  if (!item) throw new Error('Jeu non trouvé sur BGG')
+
+  const primaryName =
+    item.querySelector('name[type="primary"]')?.getAttribute('value') ??
+    item.querySelector('name')?.getAttribute('value') ??
+    ''
+
+  let description = item.querySelector('description')?.textContent ?? ''
+  // BGG encode les entités HTML dans le texte
+  description = description.replace(/&#10;/g, '\n').replace(/&#9;/g, '\t').trim().slice(0, 2000)
+
+  const rawImage = item.querySelector('image')?.textContent?.trim() ?? ''
+  const image = rawImage
+    ? rawImage.startsWith('//')
+      ? `https:${rawImage}`
+      : rawImage
+    : null
+
+  function num(selector) {
+    const v = item.querySelector(selector)?.getAttribute('value')
+    return v ? Number(v) : null
+  }
+
+  return {
+    name: primaryName,
+    yearPublished: num('yearpublished'),
+    minPlayers: num('minplayers'),
+    maxPlayers: num('maxplayers'),
+    minPlayTime: num('minplaytime'),
+    maxPlayTime: num('maxplaytime'),
+    description,
+    image,
+  }
+}
+
+// ── Cover BGG via edge function (cf.geekdo-images.com bloque CORS) ───────────
 
 export async function downloadBggCover(imageUrl) {
   const { data, error } = await supabase.functions.invoke('bgg-proxy', {
