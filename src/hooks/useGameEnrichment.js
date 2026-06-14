@@ -1,19 +1,7 @@
 import { supabase } from '../lib/supabase'
 
+const WD_API = 'https://www.wikidata.org/w/api.php'
 const CF_WORKER = 'https://curly-smoke-29c7.badier-tanguy.workers.dev'
-// API v1 (plus ancienne, restrictions OAuth différentes de v2)
-const BGG_V1 = 'https://www.boardgamegeek.com/xmlapi'
-
-async function bggFetch(bggUrl) {
-  const res = await fetch(`${CF_WORKER}/?url=${encodeURIComponent(bggUrl)}`, {
-    signal: AbortSignal.timeout(10000),
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`BGG ${res.status}: ${body.slice(0, 200)}`)
-  }
-  return res
-}
 
 export function cleanTitle(rawTitle) {
   if (!rawTitle) return ''
@@ -33,97 +21,106 @@ export async function lookupUpc(ean) {
   return data.title
 }
 
-// ── BGG search via XML API v1 ─────────────────────────────────────────────────
-// v1 : <boardgames><boardgame objectid="13"><name primary="true">Catan</name>...
+// ── Recherche via Wikidata (CORS natif, pas de proxy nécessaire) ──────────────
 
 export async function searchBgg(query) {
-  const url = `${BGG_V1}/search?search=${encodeURIComponent(query)}`
-  const res = await bggFetch(url)
-  const xml = await res.text()
-  return parseBggV1Search(xml)
-}
+  const url =
+    `${WD_API}?action=wbsearchentities` +
+    `&search=${encodeURIComponent(query)}` +
+    `&language=fr&format=json&type=item&limit=20&origin=*`
+  const res = await fetch(url, { signal: AbortSignal.timeout(8000) })
+  if (!res.ok) throw new Error(`Recherche Wikidata échouée (${res.status})`)
+  const json = await res.json()
 
-function parseBggV1Search(xml) {
-  const doc = new DOMParser().parseFromString(xml, 'text/xml')
-  return Array.from(doc.querySelectorAll('boardgame'))
-    .slice(0, 15)
-    .map((el) => {
-      const primaryName =
-        el.querySelector('name[primary="true"]')?.textContent ??
-        el.querySelector('name')?.textContent ??
-        ''
-      const year = el.querySelector('yearpublished')?.textContent ?? null
-      return {
-        id: el.getAttribute('objectid') ?? '',
-        name: primaryName.trim(),
-        yearPublished: year && year !== '0' ? year : null,
-      }
-    })
+  return (json.search ?? [])
+    .map((item) => ({
+      id: item.id,
+      name: item.label ?? '',
+      yearPublished: null,
+      description: item.description ?? '',
+    }))
     .filter((g) => g.id && g.name)
 }
 
-// ── BGG thing via XML API v1 ──────────────────────────────────────────────────
-// v1 : <boardgames><boardgame objectid="13"><yearpublished>1995</yearpublished>...
+// ── Données du jeu via Wikidata entity ───────────────────────────────────────
 
 export async function fetchBggThing(id) {
-  const url = `${BGG_V1}/boardgame/${encodeURIComponent(id)}?stats=1`
-  const res = await bggFetch(url)
-  const xml = await res.text()
-  return parseBggV1Thing(xml)
-}
+  const url = `https://www.wikidata.org/wiki/Special:EntityData/${id}.json`
+  const res = await fetch(url, { signal: AbortSignal.timeout(8000) })
+  if (!res.ok) throw new Error(`Entité Wikidata introuvable (${res.status})`)
+  const json = await res.json()
 
-function parseBggV1Thing(xml) {
-  const doc = new DOMParser().parseFromString(xml, 'text/xml')
-  const item = doc.querySelector('boardgame')
-  if (!item) throw new Error('Jeu non trouvé sur BGG')
+  const entity = json.entities?.[id]
+  if (!entity) throw new Error('Jeu non trouvé')
 
-  const primaryName =
-    item.querySelector('name[primary="true"]')?.textContent ??
-    item.querySelector('name')?.textContent ??
-    ''
-
-  function txt(selector) {
-    return item.querySelector(selector)?.textContent?.trim() ?? null
-  }
-  function num(selector) {
-    const v = txt(selector)
-    return v && v !== '0' ? Number(v) : null
+  function firstValue(prop) {
+    return entity.claims?.[prop]?.[0]?.mainsnak?.datavalue?.value ?? null
   }
 
-  let description = txt('description') ?? ''
-  description = description.replace(/&#10;/g, '\n').replace(/&#9;/g, '\t').trim().slice(0, 2000)
+  // Nom en FR puis EN
+  const name =
+    entity.labels?.fr?.value ?? entity.labels?.en?.value ?? ''
 
-  const rawImage = txt('image') ?? ''
-  const image = rawImage
-    ? rawImage.startsWith('//')
-      ? `https:${rawImage}`
-      : rawImage
+  // Année de publication (P577 = date de publication, format "+1995-01-01T00:00:00Z")
+  const yearRaw = firstValue('P577')
+  const yearPublished = yearRaw?.time
+    ? parseInt(yearRaw.time.replace(/^\+/, '').slice(0, 4))
     : null
 
+  // Joueurs (P1872 = min, P1873 = max) — valeur quantity : { amount: "+3", unit: "1" }
+  function numProp(prop) {
+    const v = firstValue(prop)
+    if (v == null) return null
+    if (typeof v === 'number') return v
+    if (v?.amount) return Math.abs(parseInt(v.amount))
+    return null
+  }
+
+  // Durée (P2047, en minutes) — même format quantity
+  const duration = numProp('P2047')
+
+  // Description courte (FR puis EN)
+  let description =
+    entity.descriptions?.fr?.value ?? entity.descriptions?.en?.value ?? ''
+
+  // Image (P18 = fichier Wikimedia Commons)
+  const imageFile = firstValue('P18')
+  let image = null
+  if (imageFile && typeof imageFile === 'string') {
+    const filename = imageFile.replace(/ /g, '_')
+    image = `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(filename)}`
+  }
+
   return {
-    name: primaryName.trim(),
-    yearPublished: num('yearpublished'),
-    minPlayers: num('minplayers'),
-    maxPlayers: num('maxplayers'),
-    minPlayTime: num('minplaytime'),
-    maxPlayTime: num('maxplaytime'),
+    name,
+    yearPublished,
+    minPlayers: numProp('P1872'),
+    maxPlayers: numProp('P1873'),
+    minPlayTime: duration,
+    maxPlayTime: duration,
     description,
     image,
   }
 }
 
-// ── Cover BGG via edge function ───────────────────────────────────────────────
+// ── Téléchargement de la cover ────────────────────────────────────────────────
 
 export async function downloadBggCover(imageUrl) {
-  const { data, error } = await supabase.functions.invoke('bgg-proxy', {
-    body: { action: 'image', url: imageUrl },
-  })
-  if (error || data?.error) throw new Error('Téléchargement de la couverture échoué')
+  // Wikimedia Commons supporte CORS — on essaie en direct d'abord
+  try {
+    const res = await fetch(imageUrl, { signal: AbortSignal.timeout(10000) })
+    if (res.ok) {
+      const blob = await res.blob()
+      const ext = (blob.type.split('/')[1] || 'jpg').split('+')[0]
+      return new File([blob], `cover.${ext}`, { type: blob.type || 'image/jpeg' })
+    }
+  } catch {}
 
-  const binary = atob(data.base64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-  const blob = new Blob([bytes], { type: data.contentType })
-  const ext = data.contentType.split('/')[1]?.split('+')[0] ?? 'jpg'
-  return new File([blob], `bgg-cover.${ext}`, { type: data.contentType })
+  // Fallback via CF Worker (au cas où CORS bloqué)
+  const proxyUrl = `${CF_WORKER}/?url=${encodeURIComponent(imageUrl)}`
+  const res2 = await fetch(proxyUrl, { signal: AbortSignal.timeout(10000) })
+  if (!res2.ok) throw new Error('Téléchargement de la couverture échoué')
+  const blob2 = await res2.blob()
+  const ext2 = (blob2.type.split('/')[1] || 'jpg').split('+')[0]
+  return new File([blob2], `cover.${ext2}`, { type: blob2.type || 'image/jpeg' })
 }

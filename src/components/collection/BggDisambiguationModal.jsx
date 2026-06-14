@@ -29,7 +29,7 @@ export function BggDisambiguationModal({ open, ean, searchTitle, results, onSele
         <div className="bg-zinc-800/60 rounded-xl px-3 py-2.5 flex flex-col gap-0.5">
           {ean && <p className="text-xs text-zinc-500">Code-barres : {ean}</p>}
           <p className="text-xs text-zinc-400">
-            Recherche BGG pour :{' '}
+            Recherche pour :{' '}
             <span className="text-zinc-200 font-medium">"{searchTitle}"</span>
           </p>
         </div>
@@ -59,9 +59,9 @@ export function BggDisambiguationModal({ open, ean, searchTitle, results, onSele
                   <span className="block text-sm font-medium text-zinc-100 truncate">
                     {game.name}
                   </span>
-                  {game.yearPublished && (
-                    <span className="text-xs text-zinc-500">{game.yearPublished}</span>
-                  )}
+                  <span className="text-xs text-zinc-500 truncate block">
+                    {[game.yearPublished, game.description].filter(Boolean).join(' · ')}
+                  </span>
                 </span>
               </button>
             )
