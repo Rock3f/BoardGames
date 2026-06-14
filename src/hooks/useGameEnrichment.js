@@ -1,7 +1,7 @@
 import { supabase } from '../lib/supabase'
 
 const WD_API = 'https://www.wikidata.org/w/api.php'
-const CF_WORKER = 'https://curly-smoke-29c7.badier-tanguy.workers.dev'
+const CF_WORKER = 'https://shy-glitter-7f27.badier-tanguy.workers.dev'
 
 const LANG_NAMES = [
   // Noms anglais
