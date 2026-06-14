@@ -169,6 +169,6 @@ Deno.serve(async (req) => {
 
     throw new Error(`Action inconnue: ${action}`)
   } catch (err) {
-    return jsonResponse({ error: err?.message ?? 'Erreur inconnue' }, 400)
+    return jsonResponse({ error: err?.message ?? 'Erreur inconnue' })
   }
 })
