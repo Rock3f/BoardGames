@@ -360,8 +360,7 @@ function CreateTab({ onClose }) {
     }
   }
 
-  async function handleFallbackSearch(e) {
-    e.preventDefault()
+  async function handleFallbackSearch() {
     const title = fallbackTitle.trim()
     if (!title) return
     setShowFallback(false)
@@ -477,7 +476,7 @@ function CreateTab({ onClose }) {
 
         {/* Fallback: EAN not in UPCitemdb → manual BGG search */}
         {showFallback && (
-          <form onSubmit={handleFallbackSearch} className="flex flex-col gap-2 bg-zinc-800/50 rounded-xl p-3 border border-zinc-700">
+          <div className="flex flex-col gap-2 bg-zinc-800/50 rounded-xl p-3 border border-zinc-700">
             <p className="text-xs text-zinc-400">
               Code-barre non reconnu — saisis le titre du jeu pour rechercher sur BGG :
             </p>
@@ -486,14 +485,15 @@ function CreateTab({ onClose }) {
                 autoFocus
                 value={fallbackTitle}
                 onChange={(e) => setFallbackTitle(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleFallbackSearch()}
                 placeholder="Ex: Catan, Wingspan…"
                 className="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:border-transparent transition-colors"
               />
-              <Button type="submit" disabled={!fallbackTitle.trim()}>
+              <Button type="button" onClick={handleFallbackSearch} disabled={!fallbackTitle.trim()}>
                 Rechercher
               </Button>
             </div>
-          </form>
+          </div>
         )}
 
         {/* Enrich feedback */}
