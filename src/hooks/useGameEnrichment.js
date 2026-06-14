@@ -48,7 +48,8 @@ function parsePhilibertHtml(html) {
 
   if (!jsonLd) return null // pas une page produit (page de résultats, accueil, etc.)
 
-  const name = jsonLd.name?.trim() ?? ''
+  // Applique cleanTitle pour enlever suffixes d'édition/langue du nom produit Philibert
+  const name = cleanTitle(jsonLd.name?.trim() ?? '')
   if (!name) return null
 
   let description = jsonLd?.description ?? ''
@@ -58,7 +59,8 @@ function parsePhilibertHtml(html) {
         ?.textContent ?? ''
     ).trim()
   }
-  description = description.replace(/\s+/g, ' ').trim().slice(0, 2000)
+  // Strip les balises HTML résiduelles, normalise les espaces
+  description = description.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 2000)
 
   let image = jsonLd?.image ? (Array.isArray(jsonLd.image) ? jsonLd.image[0] : jsonLd.image) : null
   if (!image) {
@@ -119,7 +121,7 @@ export async function lookupPhilibert(ean) {
   try {
     const searchUrl = `https://www.philibertnet.com/fr/recherche?q=${encodeURIComponent(ean)}`
     const res = await fetch(`${CF_WORKER}/?url=${encodeURIComponent(searchUrl)}`, {
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(6000),
     })
     if (!res.ok) return null
     const html = await res.text()
@@ -140,7 +142,7 @@ export async function lookupPhilibert(ean) {
     if (!productUrl.startsWith('http')) productUrl = `https://www.philibertnet.com${productUrl}`
 
     const productRes = await fetch(`${CF_WORKER}/?url=${encodeURIComponent(productUrl)}`, {
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(6000),
     })
     if (!productRes.ok) return null
 

@@ -1,11 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
-import { BrowserMultiFormatReader } from '@zxing/browser'
+import { BrowserMultiFormatReader, BarcodeFormat } from '@zxing/browser'
+import { DecodeHintType } from '@zxing/library'
+
+// Hints : restreint aux formats EAN/UPC (plus rapide et plus fiable sur mobile)
+const SCAN_HINTS = new Map([
+  [
+    DecodeHintType.POSSIBLE_FORMATS,
+    [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E],
+  ],
+  [DecodeHintType.TRY_HARDER, true],
+])
 
 export function BarcodeScannerModal({ open, onScan, onClose }) {
   const videoRef = useRef(null)
   const readerRef = useRef(null)
   const controlsRef = useRef(null)
+  const onScanRef = useRef(onScan)
   const [cameraError, setCameraError] = useState(null)
+
+  // Garde onScan à jour sans redémarrer l'effet
+  useEffect(() => {
+    onScanRef.current = onScan
+  }, [onScan])
 
   useEffect(() => {
     if (!open) return
@@ -16,30 +32,26 @@ export function BarcodeScannerModal({ open, onScan, onClose }) {
     async function start() {
       try {
         if (!readerRef.current) {
-          readerRef.current = new BrowserMultiFormatReader()
+          readerRef.current = new BrowserMultiFormatReader(SCAN_HINTS)
         }
-
-        const devices = await BrowserMultiFormatReader.listVideoInputDevices()
-        if (!devices.length) {
-          setCameraError('Aucune caméra disponible sur cet appareil.')
-          return
-        }
-
-        // Prefer rear/environment camera
-        const back = devices.find((d) =>
-          /back|rear|environment|arrière/i.test(d.label),
-        )
-        const deviceId = back?.deviceId ?? devices[devices.length - 1]?.deviceId
 
         if (stopped) return
 
-        controlsRef.current = await readerRef.current.decodeFromVideoDevice(
-          deviceId,
+        // decodeFromConstraints : demande directement la caméra arrière
+        // à haute résolution — plus fiable que sélection par deviceId
+        controlsRef.current = await readerRef.current.decodeFromConstraints(
+          {
+            video: {
+              facingMode: 'environment',
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+          },
           videoRef.current,
           (result, _err, controls) => {
             if (result) {
               controls.stop()
-              onScan(result.getText())
+              onScanRef.current(result.getText())
             }
           },
         )
@@ -67,7 +79,7 @@ export function BarcodeScannerModal({ open, onScan, onClose }) {
       }
       controlsRef.current = null
     }
-  }, [open, onScan])
+  }, [open]) // onScan retiré des deps — géré via ref
 
   if (!open) return null
 
