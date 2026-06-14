@@ -327,22 +327,35 @@ export async function fetchBggThing(id) {
 
 // ── Téléchargement de la cover ────────────────────────────────────────────────
 
+function blobToFile(blob) {
+  const ext = (blob.type.split('/')[1] || 'jpg').replace(/\+.*$/, '')
+  return new File([blob], `cover.${ext}`, { type: blob.type || 'image/jpeg' })
+}
+
 export async function downloadBggCover(imageUrl) {
-  // Wikimedia Commons supporte CORS — on essaie en direct d'abord
+  // 1. Fetch direct (fonctionne pour Wikimedia qui expose CORS)
   try {
-    const res = await fetch(imageUrl, { signal: AbortSignal.timeout(10000) })
-    if (res.ok) {
-      const blob = await res.blob()
-      const ext = (blob.type.split('/')[1] || 'jpg').split('+')[0]
-      return new File([blob], `cover.${ext}`, { type: blob.type || 'image/jpeg' })
-    }
+    const res = await fetch(imageUrl, { signal: AbortSignal.timeout(8000) })
+    if (res.ok) return blobToFile(await res.blob())
   } catch {}
 
-  // Fallback via CF Worker (au cas où CORS bloqué)
-  const proxyUrl = `${CF_WORKER}/?url=${encodeURIComponent(imageUrl)}`
-  const res2 = await fetch(proxyUrl, { signal: AbortSignal.timeout(10000) })
-  if (!res2.ok) throw new Error('Téléchargement de la couverture échoué')
-  const blob2 = await res2.blob()
-  const ext2 = (blob2.type.split('/')[1] || 'jpg').split('+')[0]
-  return new File([blob2], `cover.${ext2}`, { type: blob2.type || 'image/jpeg' })
+  // 2. CF Worker (pour la plupart des domaines, mais CF→CF peut être bloqué par Philibert)
+  try {
+    const res = await fetch(`${CF_WORKER}/?url=${encodeURIComponent(imageUrl)}`, {
+      signal: AbortSignal.timeout(8000),
+    })
+    if (res.ok) return blobToFile(await res.blob())
+  } catch {}
+
+  // 3. Supabase Edge Function (Deno Deploy, réseau différent — contourne le blocage CF→CF Philibert)
+  const { data, error } = await supabase.functions.invoke('bgg-proxy', {
+    body: { action: 'image', url: imageUrl },
+  })
+  if (error || !data?.base64) throw new Error('Téléchargement de la couverture échoué')
+
+  const binary = atob(data.base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  const blob = new Blob([bytes], { type: data.contentType || 'image/jpeg' })
+  return blobToFile(blob)
 }
