@@ -285,8 +285,16 @@ export async function fetchBggThing(id) {
       const summaryRes = await fetch(summaryUrl, { signal: AbortSignal.timeout(5000) })
       if (summaryRes.ok) {
         const summaryJson = await summaryRes.json()
-        if (summaryJson.extract) description = summaryJson.extract.slice(0, 2000)
-        // originalimage > thumbnail (meilleure résolution, toujours la photo de boîte)
+        // Pour les articles de jeux, le 1er paragraphe est historique ("publié par X en 1995..."),
+        // le 2e explique le principe du jeu — on préfère le 2e (ou le 1er si c'est le seul).
+        if (summaryJson.extract) {
+          const paras = summaryJson.extract
+            .split(/\n+/)
+            .map((p) => p.trim())
+            .filter((p) => p.length > 40)
+          description = (paras.length > 1 ? paras.slice(1).join(' ') : paras[0] ?? '')
+            .slice(0, 600)
+        }
         image =
           summaryJson.originalimage?.source ??
           summaryJson.thumbnail?.source ??
