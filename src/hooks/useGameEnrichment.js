@@ -163,16 +163,21 @@ export async function lookupUpc(ean) {
 
 // ── Recherche via Wikidata (CORS natif, pas de proxy nécessaire) ──────────────
 
+// Descriptions Wikidata qui indiquent un jeu de société / cartes / plateau
+const BOARD_GAME_RE =
+  /jeu\s+de\s+(soci[eé]t[eé]|plateau|cartes?|d[eé]s|r[oô]le)|board\s+game|card\s+game|tabletop\s+game/i
+
 export async function searchBgg(query) {
+  // On demande 50 résultats pour avoir assez de jeux après filtrage
   const url =
     `${WD_API}?action=wbsearchentities` +
     `&search=${encodeURIComponent(query)}` +
-    `&language=fr&format=json&type=item&limit=20&origin=*`
+    `&language=fr&format=json&type=item&limit=50&origin=*`
   const res = await fetch(url, { signal: AbortSignal.timeout(8000) })
   if (!res.ok) throw new Error(`Recherche Wikidata échouée (${res.status})`)
   const json = await res.json()
 
-  return (json.search ?? [])
+  const all = (json.search ?? [])
     .map((item) => ({
       id: item.id,
       name: item.label ?? '',
@@ -180,6 +185,10 @@ export async function searchBgg(query) {
       description: item.description ?? '',
     }))
     .filter((g) => g.id && g.name)
+
+  // Filtre sur les jeux de société ; si aucun résultat filtré, retourne tout (jeu inconnu de Wikidata)
+  const games = all.filter((g) => BOARD_GAME_RE.test(g.description))
+  return (games.length > 0 ? games : all).slice(0, 15)
 }
 
 // ── Données du jeu via Wikidata entity ───────────────────────────────────────
