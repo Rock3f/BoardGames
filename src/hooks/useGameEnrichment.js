@@ -1,8 +1,28 @@
 import { supabase } from '../lib/supabase'
 
 const BGG_API = 'https://boardgamegeek.com/xmlapi2'
-// corsproxy.io relaie la réponse BGG avec les headers CORS manquants
-const CORS_PROXY = 'https://corsproxy.io/?url='
+
+// Proxies CORS essayés dans l'ordre jusqu'au premier qui répond OK
+const CORS_PROXIES = [
+  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+  (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+]
+
+async function bggFetch(bggUrl) {
+  let lastErr
+  for (const buildProxy of CORS_PROXIES) {
+    const proxyUrl = buildProxy(bggUrl)
+    try {
+      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(8000) })
+      if (res.ok) return res
+      lastErr = new Error(`HTTP ${res.status} via ${proxyUrl}`)
+    } catch (e) {
+      lastErr = e
+    }
+  }
+  throw lastErr ?? new Error('Impossible de contacter BGG')
+}
 
 export function cleanTitle(rawTitle) {
   if (!rawTitle) return ''
@@ -26,8 +46,7 @@ export async function lookupUpc(ean) {
 
 export async function searchBgg(query) {
   const bggUrl = `${BGG_API}/search?query=${encodeURIComponent(query)}&type=boardgame`
-  const res = await fetch(`${CORS_PROXY}${encodeURIComponent(bggUrl)}`)
-  if (!res.ok) throw new Error(`BGG search échoué (${res.status})`)
+  const res = await bggFetch(bggUrl)
   const xml = await res.text()
   return parseBggSearch(xml)
 }
@@ -54,8 +73,7 @@ function parseBggSearch(xml) {
 
 export async function fetchBggThing(id) {
   const bggUrl = `${BGG_API}/thing?id=${encodeURIComponent(id)}&stats=1`
-  const res = await fetch(`${CORS_PROXY}${encodeURIComponent(bggUrl)}`)
-  if (!res.ok) throw new Error(`BGG thing échoué (${res.status})`)
+  const res = await bggFetch(bggUrl)
   const xml = await res.text()
   return parseBggThing(xml)
 }
@@ -71,7 +89,6 @@ function parseBggThing(xml) {
     ''
 
   let description = item.querySelector('description')?.textContent ?? ''
-  // BGG encode les entités HTML dans le texte
   description = description.replace(/&#10;/g, '\n').replace(/&#9;/g, '\t').trim().slice(0, 2000)
 
   const rawImage = item.querySelector('image')?.textContent?.trim() ?? ''
