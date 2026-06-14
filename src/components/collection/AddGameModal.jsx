@@ -266,7 +266,7 @@ const EMPTY_FIELDS = {
 
 const isTouchDevice = typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
 
-function CreateTab({ onClose }) {
+function CreateTab({ onClose, scrollRef }) {
   const toast = useToast()
   const createGame = useCreateGame()
   const fileRef = useRef(null)
@@ -363,6 +363,7 @@ function CreateTab({ onClose }) {
         .limit(1)
       if (existing?.length > 0) setDuplicateWarning(existing[0])
     }
+    if (scrollRef?.current) scrollRef.current.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   async function handleScan(ean) {
@@ -632,6 +633,7 @@ function CreateTab({ onClose }) {
 
 export function AddGameModal({ open, onClose, collectionGameIds = new Set() }) {
   const [tab, setTab] = useState('search')
+  const scrollRef = useRef(null)
 
   function handleClose() {
     setTab('search')
@@ -639,7 +641,7 @@ export function AddGameModal({ open, onClose, collectionGameIds = new Set() }) {
   }
 
   return (
-    <Modal open={open} onClose={handleClose} title="Ajouter un jeu">
+    <Modal open={open} onClose={handleClose} title="Ajouter un jeu" scrollRef={scrollRef}>
       <div className="flex border-b border-zinc-800 mb-4 -mx-4 px-4">
         {[
           { id: 'search', label: 'Catalogue' },
@@ -663,7 +665,7 @@ export function AddGameModal({ open, onClose, collectionGameIds = new Set() }) {
       {tab === 'search' ? (
         <SearchTab collectionGameIds={collectionGameIds} onClose={handleClose} />
       ) : (
-        <CreateTab onClose={handleClose} />
+        <CreateTab onClose={handleClose} scrollRef={scrollRef} />
       )}
     </Modal>
   )

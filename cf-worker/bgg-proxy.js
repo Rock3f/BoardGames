@@ -18,7 +18,8 @@ export default {
     if (
       !target.hostname.endsWith('boardgamegeek.com') &&
       !target.hostname.endsWith('geekdo.com') &&
-      !target.hostname.endsWith('philibertnet.com')
+      !target.hostname.endsWith('philibertnet.com') &&
+      !target.hostname.endsWith('wikimedia.org')
     ) {
       return new Response('Forbidden', { status: 403 })
     }

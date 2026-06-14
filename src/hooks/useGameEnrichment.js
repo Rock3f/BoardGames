@@ -239,7 +239,23 @@ export async function fetchBggThing(id) {
   let image = null
   if (imageFile && typeof imageFile === 'string') {
     const filename = imageFile.replace(/ /g, '_')
-    image = `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(filename)}`
+    // L'API Commons renvoie une URL directe upload.wikimedia.org (CORS natif, pas de redirection)
+    try {
+      const imgApi =
+        `https://commons.wikimedia.org/w/api.php?action=query` +
+        `&titles=File:${encodeURIComponent(filename)}` +
+        `&prop=imageinfo&iiprop=url&iiurlwidth=400&format=json&origin=*`
+      const imgRes = await fetch(imgApi, { signal: AbortSignal.timeout(5000) })
+      if (imgRes.ok) {
+        const imgJson = await imgRes.json()
+        const pages = Object.values(imgJson.query?.pages ?? {})
+        const info = pages[0]?.imageinfo?.[0]
+        image = info?.thumburl ?? info?.url ?? null
+      }
+    } catch {}
+    if (!image) {
+      image = `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(filename)}`
+    }
   }
 
   return {

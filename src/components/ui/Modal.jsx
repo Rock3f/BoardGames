@@ -1,10 +1,14 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 
-export function Modal({ open, onClose, title, children }) {
+export function Modal({ open, onClose, title, children, scrollRef: externalScrollRef }) {
+  const internalScrollRef = useRef(null)
+  const scrollRef = externalScrollRef ?? internalScrollRef
+
   useEffect(() => {
     if (!open) return
     const handler = (e) => { if (e.key === 'Escape') onClose() }
     window.addEventListener('keydown', handler)
+    if (scrollRef.current) scrollRef.current.scrollTop = 0
     return () => window.removeEventListener('keydown', handler)
   }, [open, onClose])
 
@@ -29,7 +33,7 @@ export function Modal({ open, onClose, title, children }) {
             </svg>
           </button>
         </div>
-        <div className="overflow-y-auto p-4 flex-1">
+        <div ref={scrollRef} className="overflow-y-auto p-4 flex-1">
           {children}
         </div>
       </div>
