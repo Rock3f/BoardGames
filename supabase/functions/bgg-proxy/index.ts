@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { XMLParser } from 'https://esm.sh/fast-xml-parser@4.4.1'
 
-const BGG_API = 'https://boardgamegeek.com/xmlapi2'
+const BGG_API = 'https://api.geekdo.com/xmlapi2'
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -177,6 +177,19 @@ Deno.serve(async (req) => {
       if (!body.url) throw new Error('url est requis')
       const result = await handleImage(String(body.url))
       return jsonResponse(result)
+    }
+
+    if (action === 'debug') {
+      const testUrl = `${BGG_API}/search?query=catan&type=boardgame`
+      const res = await fetch(testUrl, { headers: BGG_HEADERS })
+      const body = await res.text()
+      return jsonResponse({
+        status: res.status,
+        statusText: res.statusText,
+        headers: Object.fromEntries(res.headers.entries()),
+        bodyPreview: body.slice(0, 500),
+        urlTested: testUrl,
+      })
     }
 
     throw new Error(`Action inconnue: ${action}`)
