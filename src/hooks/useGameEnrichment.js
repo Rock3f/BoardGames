@@ -3,10 +3,29 @@ import { supabase } from '../lib/supabase'
 const WD_API = 'https://www.wikidata.org/w/api.php'
 const CF_WORKER = 'https://curly-smoke-29c7.badier-tanguy.workers.dev'
 
+const LANG_NAMES = [
+  // Noms anglais
+  'English', 'French', 'German', 'Spanish', 'Italian', 'Dutch', 'Portuguese',
+  'Russian', 'Japanese', 'Korean', 'Chinese', 'Polish', 'Swedish', 'Norwegian',
+  'Danish', 'Finnish', 'Czech', 'Slovak', 'Hungarian', 'Romanian', 'Greek',
+  'Turkish', 'Arabic', 'Hebrew', 'Thai', 'Indonesian', 'Ukrainian', 'Bulgarian',
+  'Croatian', 'Serbian', 'Catalan',
+  // Noms français
+  'Français', 'Anglais', 'Allemand', 'Espagnol', 'Italien', 'Néerlandais', 'Portugais',
+].join('|')
+
+const EDITION_SUFFIX = `(?:\\s+(?:Edition|Édition|Version|Ed\\.?|Ver\\.?))?`
+// Supprime : " French", " French Edition", " - French Edition", " (French)", " (French Edition)"
+const LANG_RE = new RegExp(
+  `(?:(?:\\s*[-–]\\s*|\\s+)(?:${LANG_NAMES})${EDITION_SUFFIX}|\\s*\\((?:${LANG_NAMES})${EDITION_SUFFIX}\\s*\\))\\s*$`,
+  'i'
+)
+
 export function cleanTitle(rawTitle) {
   if (!rawTitle) return ''
   let title = rawTitle.split(/\s[-–]\s/)[0].trim()
   title = title.replace(/\s*\(\d{4}\)\s*$/, '').trim()
+  title = title.replace(LANG_RE, '').trim()
   return title
 }
 
