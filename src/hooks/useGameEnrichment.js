@@ -247,12 +247,35 @@ export async function fetchBggThing(id) {
     return null
   }
 
-  // Durée (P2047, en minutes) — même format quantity
-  const duration = numProp('P2047')
+  // Durée (P2047, en minutes) — quantity avec lowerBound/upperBound pour min/max
+  function durationProp() {
+    const v = entity.claims?.P2047?.[0]?.mainsnak?.datavalue?.value
+    if (!v?.amount) return [null, null]
+    const amt = Math.abs(parseInt(v.amount))
+    const low = v.lowerBound ? Math.abs(parseInt(v.lowerBound)) : amt
+    const high = v.upperBound ? Math.abs(parseInt(v.upperBound)) : amt
+    return [low, high]
+  }
+  const [minPlayTime, maxPlayTime] = durationProp()
 
-  // Description courte (FR puis EN)
+  // Description : Wikipedia REST (paragraphe complet) > Wikidata (une ligne)
   let description =
     entity.descriptions?.fr?.value ?? entity.descriptions?.en?.value ?? ''
+  const wikilinks = entity.sitelinks ?? {}
+  const wikiTitle = wikilinks.frwiki?.title ?? wikilinks.enwiki?.title ?? null
+  const wikiLang = wikilinks.frwiki ? 'fr' : 'en'
+  if (wikiTitle) {
+    try {
+      const summaryUrl =
+        `https://${wikiLang}.wikipedia.org/api/rest_v1/page/summary/` +
+        encodeURIComponent(wikiTitle.replace(/ /g, '_'))
+      const summaryRes = await fetch(summaryUrl, { signal: AbortSignal.timeout(5000) })
+      if (summaryRes.ok) {
+        const summaryJson = await summaryRes.json()
+        if (summaryJson.extract) description = summaryJson.extract.slice(0, 2000)
+      }
+    } catch {}
+  }
 
   // Image (P18 = fichier Wikimedia Commons)
   const imageFile = firstValue('P18')
@@ -301,8 +324,8 @@ export async function fetchBggThing(id) {
     publisher,
     minPlayers: numProp('P1872'),
     maxPlayers: numProp('P1873'),
-    minPlayTime: duration,
-    maxPlayTime: duration,
+    minPlayTime,
+    maxPlayTime,
     description,
     image,
   }
