@@ -2,26 +2,14 @@ import { supabase } from '../lib/supabase'
 
 const BGG_API = 'https://boardgamegeek.com/xmlapi2'
 
-// Proxies CORS essayés dans l'ordre jusqu'au premier qui répond OK
-const CORS_PROXIES = [
-  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-  (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-  (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
-]
+const CF_WORKER = 'https://curly-smoke-29c7.badier-tanguy.workers.dev'
 
 async function bggFetch(bggUrl) {
-  let lastErr
-  for (const buildProxy of CORS_PROXIES) {
-    const proxyUrl = buildProxy(bggUrl)
-    try {
-      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(8000) })
-      if (res.ok) return res
-      lastErr = new Error(`HTTP ${res.status} via ${proxyUrl}`)
-    } catch (e) {
-      lastErr = e
-    }
-  }
-  throw lastErr ?? new Error('Impossible de contacter BGG')
+  const res = await fetch(`${CF_WORKER}/?url=${encodeURIComponent(bggUrl)}`, {
+    signal: AbortSignal.timeout(10000),
+  })
+  if (!res.ok) throw new Error(`BGG error ${res.status}`)
+  return res
 }
 
 export function cleanTitle(rawTitle) {
