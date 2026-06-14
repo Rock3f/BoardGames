@@ -275,6 +275,8 @@ export async function fetchBggThing(id) {
   const wikilinks = entity.sitelinks ?? {}
   const wikiTitle = wikilinks.frwiki?.title ?? wikilinks.enwiki?.title ?? null
   const wikiLang = wikilinks.frwiki ? 'fr' : 'en'
+  // Image et description depuis Wikipedia Summary (thumbnail = photo principale de l'article = boîte du jeu)
+  let image = null
   if (wikiTitle) {
     try {
       const summaryUrl =
@@ -284,38 +286,13 @@ export async function fetchBggThing(id) {
       if (summaryRes.ok) {
         const summaryJson = await summaryRes.json()
         if (summaryJson.extract) description = summaryJson.extract.slice(0, 2000)
+        // originalimage > thumbnail (meilleure résolution, toujours la photo de boîte)
+        image =
+          summaryJson.originalimage?.source ??
+          summaryJson.thumbnail?.source ??
+          null
       }
     } catch {}
-  }
-
-  // Image (P18 = fichier Wikimedia Commons) — préfère les images de boîte
-  const p18Claims = entity.claims?.P18 ?? []
-  const BOX_RE = /box|cover|bo[îi]te|front|packshot|jaquette/i
-  const allP18 = p18Claims
-    .map((c) => c.mainsnak?.datavalue?.value)
-    .filter((v) => v && typeof v === 'string')
-  const imageFile = allP18.find((f) => BOX_RE.test(f)) ?? allP18[0] ?? null
-
-  let image = null
-  if (imageFile && typeof imageFile === 'string') {
-    const filename = imageFile.replace(/ /g, '_')
-    // L'API Commons renvoie une URL directe upload.wikimedia.org (CORS natif, pas de redirection)
-    try {
-      const imgApi =
-        `https://commons.wikimedia.org/w/api.php?action=query` +
-        `&titles=File:${encodeURIComponent(filename)}` +
-        `&prop=imageinfo&iiprop=url&iiurlwidth=400&format=json&origin=*`
-      const imgRes = await fetch(imgApi, { signal: AbortSignal.timeout(5000) })
-      if (imgRes.ok) {
-        const imgJson = await imgRes.json()
-        const pages = Object.values(imgJson.query?.pages ?? {})
-        const info = pages[0]?.imageinfo?.[0]
-        image = info?.thumburl ?? info?.url ?? null
-      }
-    } catch {}
-    if (!image) {
-      image = `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(filename)}`
-    }
   }
 
   // Éditeur (P123 = publisher) — stocké comme QID, on résout le label en FR/EN
