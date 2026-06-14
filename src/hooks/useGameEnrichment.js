@@ -1,14 +1,16 @@
 import { supabase } from '../lib/supabase'
 
-const BGG_API = 'https://boardgamegeek.com/xmlapi2'
-
 const CF_WORKER = 'https://curly-smoke-29c7.badier-tanguy.workers.dev'
 
+// Appel via CF Worker (ajoute les headers navigateur + CORS)
 async function bggFetch(bggUrl) {
   const res = await fetch(`${CF_WORKER}/?url=${encodeURIComponent(bggUrl)}`, {
     signal: AbortSignal.timeout(10000),
   })
-  if (!res.ok) throw new Error(`BGG error ${res.status}`)
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`BGG ${res.status}: ${body.slice(0, 200)}`)
+  }
   return res
 }
 
@@ -30,74 +32,58 @@ export async function lookupUpc(ean) {
   return data.title
 }
 
-// ── BGG search depuis le navigateur via proxy CORS ───────────────────────────
+// ── BGG search via API interne geekdo.com (JSON) ─────────────────────────────
 
 export async function searchBgg(query) {
-  const bggUrl = `${BGG_API}/search?query=${encodeURIComponent(query)}&type=boardgame`
-  const res = await bggFetch(bggUrl)
-  const xml = await res.text()
-  return parseBggSearch(xml)
+  const url = `https://api.geekdo.com/api/search?q=${encodeURIComponent(query)}&objecttype=boardgame&nosession=1&showcount=25`
+  const res = await bggFetch(url)
+  const json = await res.json()
+
+  return (json.items ?? [])
+    .map((item) => ({
+      id: String(item.objectid ?? item.id ?? ''),
+      name: item.label ?? item.name?.value ?? item.originalname ?? '',
+      yearPublished: item.yearpublished
+        ? String(item.yearpublished?.value ?? item.yearpublished)
+        : null,
+    }))
+    .filter((g) => g.id && g.name)
 }
 
-function parseBggSearch(xml) {
-  const doc = new DOMParser().parseFromString(xml, 'text/xml')
-  return Array.from(doc.querySelectorAll('item'))
-    .slice(0, 15)
-    .map((item) => {
-      const primaryName =
-        item.querySelector('name[type="primary"]')?.getAttribute('value') ??
-        item.querySelector('name')?.getAttribute('value') ??
-        ''
-      return {
-        id: item.getAttribute('id'),
-        name: primaryName,
-        yearPublished: item.querySelector('yearpublished')?.getAttribute('value') ?? null,
-      }
-    })
-    .filter((g) => g.name)
-}
-
-// ── BGG thing depuis le navigateur via proxy CORS ────────────────────────────
+// ── BGG thing via API interne geekdo.com (JSON) ──────────────────────────────
 
 export async function fetchBggThing(id) {
-  const bggUrl = `${BGG_API}/thing?id=${encodeURIComponent(id)}&stats=1`
-  const res = await bggFetch(bggUrl)
-  const xml = await res.text()
-  return parseBggThing(xml)
-}
+  const url = `https://api.geekdo.com/api/geekitems?nosession=1&objecttype=thing&objectid=${encodeURIComponent(id)}`
+  const res = await bggFetch(url)
+  const json = await res.json()
 
-function parseBggThing(xml) {
-  const doc = new DOMParser().parseFromString(xml, 'text/xml')
-  const item = doc.querySelector('item')
-  if (!item) throw new Error('Jeu non trouvé sur BGG')
+  // L'API peut retourner { item: {...} } ou { items: [...] }
+  const item = json.item ?? json.items?.[0] ?? json
 
-  const primaryName =
-    item.querySelector('name[type="primary"]')?.getAttribute('value') ??
-    item.querySelector('name')?.getAttribute('value') ??
-    ''
+  function val(field) {
+    const v = item[field]
+    if (v == null) return null
+    if (typeof v === 'object') return v.value ?? null
+    return v
+  }
 
-  let description = item.querySelector('description')?.textContent ?? ''
-  description = description.replace(/&#10;/g, '\n').replace(/&#9;/g, '\t').trim().slice(0, 2000)
-
-  const rawImage = item.querySelector('image')?.textContent?.trim() ?? ''
+  const rawImage = val('image') ?? item.images?.medium ?? item.thumbnail ?? null
   const image = rawImage
     ? rawImage.startsWith('//')
       ? `https:${rawImage}`
       : rawImage
     : null
 
-  function num(selector) {
-    const v = item.querySelector(selector)?.getAttribute('value')
-    return v ? Number(v) : null
-  }
+  let description = val('description') ?? ''
+  description = description.replace(/&#10;/g, '\n').replace(/&#9;/g, '\t').trim().slice(0, 2000)
 
   return {
-    name: primaryName,
-    yearPublished: num('yearpublished'),
-    minPlayers: num('minplayers'),
-    maxPlayers: num('maxplayers'),
-    minPlayTime: num('minplaytime'),
-    maxPlayTime: num('maxplaytime'),
+    name: val('name') ?? '',
+    yearPublished: val('yearpublished') ? Number(val('yearpublished')) : null,
+    minPlayers: val('minplayers') ? Number(val('minplayers')) : null,
+    maxPlayers: val('maxplayers') ? Number(val('maxplayers')) : null,
+    minPlayTime: val('minplaytime') ? Number(val('minplaytime')) : null,
+    maxPlayTime: val('maxplaytime') ? Number(val('maxplaytime')) : null,
     description,
     image,
   }
